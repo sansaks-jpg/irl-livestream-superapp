@@ -16,6 +16,7 @@ class StreamManager extends EventEmitter {
       speed: '0x'
     };
     this.uptimeInterval = null;
+    this.recentLogs = [];
   }
 
   startStream(customOptions = {}) {
@@ -32,47 +33,49 @@ class StreamManager extends EventEmitter {
     if (isMock) {
       console.log('[StreamManager] Starting in TEST/MOCK mode (output to null)...');
     } else {
-      targetUrl = `${rtmpUrl.replace(/\/$/, '')}/${streamKey}`;
+      targetUrl = `${rtmpUrl.replace(/\/$/, '')}/${streamKey.trim()}`;
       console.log(`[StreamManager] Starting live stream to: ${rtmpUrl}/****`);
     }
 
-    // Build FFmpeg command arguments
-    // Expect WebM with VP8/VP9/H264 + Opus audio from browser MediaRecorder
+    // FFmpeg args optimized for live WebM pipe -> YouTube RTMP
     const args = [
       '-hide_banner',
       '-loglevel', 'info',
-      '-re',
+      // Low latency input flags for pipe:0
+      '-fflags', '+nobuffer+genpts+discardcorrupt',
+      '-probesize', '1000000',
+      '-analyzeduration', '1000000',
       '-f', 'webm',
       '-i', 'pipe:0'
     ];
 
     if (isMock) {
-      // Mock mode: decode and discard, still calculate fps/stats
-      args.push(
-        '-f', 'null',
-        '-'
-      );
+      args.push('-f', 'null', '-');
     } else {
-      // Real RTMP mode: encode to H.264 + AAC in FLV container
       args.push(
+        // Video encoder settings
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
+        '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-b:v', videoBitrate || '3000k',
         '-maxrate', videoBitrate || '3000k',
-        '-bufsize', '6000k',
+        '-bufsize', '4000k',
         '-pix_fmt', 'yuv420p',
         '-r', String(fps || 30),
         '-g', String((fps || 30) * 2),
+        // Audio encoder settings
         '-c:a', 'aac',
         '-b:a', audioBitrate || '128k',
         '-ar', '44100',
+        // RTMP output flags
+        '-flvflags', 'no_duration_filesize',
         '-f', 'flv',
         targetUrl
       );
     }
 
     try {
+      this.recentLogs = [];
       this.ffmpegProcess = spawn('ffmpeg', args, {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe']
@@ -82,6 +85,13 @@ class StreamManager extends EventEmitter {
       this.startTime = Date.now();
       this.emit('started', { isMock, target: isMock ? 'TEST_MODE' : 'YOUTUBE_LIVE' });
 
+      // Handle stdin error to prevent unhandled EPIPE
+      this.ffmpegProcess.stdin.on('error', (err) => {
+        if (err.code !== 'EPIPE') {
+          console.warn('[StreamManager] Stdin warning:', err.message);
+        }
+      });
+
       // Start uptime counter
       this.uptimeInterval = setInterval(() => {
         if (this.startTime) {
@@ -90,20 +100,31 @@ class StreamManager extends EventEmitter {
         }
       }, 1000);
 
-      // Listen to stderr for stats
+      // Listen to stderr for stats and log errors
       this.ffmpegProcess.stderr.on('data', (data) => {
-        const line = data.toString();
-        this.parseFfmpegOutput(line);
+        const text = data.toString();
+        this.recentLogs.push(text);
+        if (this.recentLogs.length > 20) this.recentLogs.shift();
+
+        // Print connection messages
+        if (text.includes('Opening') || text.includes('error') || text.includes('Error') || text.includes('failed') || text.includes('Connection')) {
+          console.log('[FFmpeg log]', text.trim());
+        }
+
+        this.parseFfmpegOutput(text);
       });
 
       this.ffmpegProcess.on('error', (err) => {
-        console.error('[StreamManager] FFmpeg process error:', err.message);
+        console.error('[StreamManager] FFmpeg process spawn error:', err.message);
         this.emit('error', err);
         this.cleanup();
       });
 
       this.ffmpegProcess.on('close', (code) => {
         console.log(`[StreamManager] FFmpeg closed with code ${code}`);
+        if (code !== 0 && code !== null) {
+          console.error('[StreamManager] Last FFmpeg logs:\n', this.recentLogs.slice(-5).join(''));
+        }
         this.cleanup();
         this.emit('stopped', { code });
       });
@@ -117,13 +138,13 @@ class StreamManager extends EventEmitter {
   }
 
   writeChunk(chunk) {
-    if (!this.isStreaming || !this.ffmpegProcess || !this.ffmpegProcess.stdin.writable) {
+    if (!this.isStreaming || !this.ffmpegProcess || !this.ffmpegProcess.stdin || !this.ffmpegProcess.stdin.writable) {
       return false;
     }
     try {
       return this.ffmpegProcess.stdin.write(chunk);
     } catch (err) {
-      console.error('[StreamManager] Error writing chunk to stdin:', err.message);
+      // Ignored if process was stopping
       return false;
     }
   }
@@ -135,17 +156,18 @@ class StreamManager extends EventEmitter {
     console.log('[StreamManager] Stopping stream gracefully...');
     if (this.ffmpegProcess) {
       try {
-        if (this.ffmpegProcess.stdin.writable) {
+        if (this.ffmpegProcess.stdin && this.ffmpegProcess.stdin.writable) {
           this.ffmpegProcess.stdin.end();
         }
-        // If it doesn't close in 2 seconds, kill it
         setTimeout(() => {
           if (this.ffmpegProcess) {
             this.ffmpegProcess.kill('SIGTERM');
           }
-        }, 2000);
+        }, 1500);
       } catch (err) {
-        this.ffmpegProcess.kill('SIGKILL');
+        if (this.ffmpegProcess) {
+          this.ffmpegProcess.kill('SIGKILL');
+        }
       }
     }
     this.cleanup();
@@ -171,7 +193,6 @@ class StreamManager extends EventEmitter {
   }
 
   parseFfmpegOutput(line) {
-    // Example line: frame=  120 fps= 30 q=28.0 size=    1024kB time=00:00:04.00 bitrate=2097.2kbits/s speed=1.00x
     const frameMatch = line.match(/frame=\s*(\d+)/);
     const fpsMatch = line.match(/fps=\s*([\d.]+)/);
     const bitrateMatch = line.match(/bitrate=\s*([\d.]+kbits\/s)/);

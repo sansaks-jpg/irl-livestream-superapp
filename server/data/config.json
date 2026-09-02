@@ -1,6 +1,6 @@
 {
   "rtmpUrl": "rtmp://a.rtmp.youtube.com/live2",
-  "streamKey": "",
+  "streamKey": "t4rd-xymk-u090-v3a3-67hd",
   "resolution": "1280x720",
   "fps": 30,
   "videoBitrate": "3000k",
@@ -8,9 +8,11 @@
   "audioGain": 1,
   "audioLimiterEnabled": true,
   "audioLimiterThreshold": -6,
-  "youtubeVideoId": "",
+  "youtubeVideoId": "1jFHM2zbvg4",
+  "youtubeChannel": "sansaks",
   "obsEnabled": false,
   "obsUrl": "ws://localhost:4455",
   "obsPassword": "",
-  "privacyText": "BRB - SINYAL GANGGUAN / PRIVACY SHIELD"
+  "privacyText": "BRB - SINYAL GANGGUAN / PRIVACY SHIELD",
+  "streamKeyMasked": "t4rd...67hd"
 }
