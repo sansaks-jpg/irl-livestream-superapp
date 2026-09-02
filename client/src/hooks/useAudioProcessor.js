@@ -1,15 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 export function useAudioProcessor(inputStream) {
-  const [gainValue, setGainValue] = useState(1.0); // 0.0 - 2.5
+  const [gainValue, setGainValue] = useState(1.0); // 0.0 - 2.0
   const [isMuted, setIsMuted] = useState(false);
   const [limiterEnabled, setLimiterEnabled] = useState(true);
   const [vuLevel, setVuLevel] = useState(0); // 0 - 100
   const [isClipping, setIsClipping] = useState(false);
 
+  // 3-Band Studio EQ states (-12dB to +12dB)
+  const [bass, setBass] = useState(0); // 150Hz
+  const [mid, setMid] = useState(0);   // 1200Hz
+  const [treble, setTreble] = useState(0); // 6000Hz
+
   const audioContextRef = useRef(null);
   const sourceNodeRef = useRef(null);
   const gainNodeRef = useRef(null);
+  const lowFilterRef = useRef(null);
+  const midFilterRef = useRef(null);
+  const highFilterRef = useRef(null);
   const compressorNodeRef = useRef(null);
   const analyserNodeRef = useRef(null);
   const destinationNodeRef = useRef(null);
@@ -30,11 +38,32 @@ export function useAudioProcessor(inputStream) {
       const source = ctx.createMediaStreamSource(inputStream);
       sourceNodeRef.current = source;
 
+      // 1. Gain Node
       const gainNode = ctx.createGain();
       gainNode.gain.setValueAtTime(gainValue, ctx.currentTime);
       gainNodeRef.current = gainNode;
 
-      // DynamicsCompressor acts as limiter
+      // 2. 3-Band EQ Filters
+      const lowFilter = ctx.createBiquadFilter();
+      lowFilter.type = 'lowshelf';
+      lowFilter.frequency.setValueAtTime(150, ctx.currentTime);
+      lowFilter.gain.setValueAtTime(bass, ctx.currentTime);
+      lowFilterRef.current = lowFilter;
+
+      const midFilter = ctx.createBiquadFilter();
+      midFilter.type = 'peaking';
+      midFilter.frequency.setValueAtTime(1200, ctx.currentTime);
+      midFilter.Q.setValueAtTime(1.0, ctx.currentTime);
+      midFilter.gain.setValueAtTime(mid, ctx.currentTime);
+      midFilterRef.current = midFilter;
+
+      const highFilter = ctx.createBiquadFilter();
+      highFilter.type = 'highshelf';
+      highFilter.frequency.setValueAtTime(6000, ctx.currentTime);
+      highFilter.gain.setValueAtTime(treble, ctx.currentTime);
+      highFilterRef.current = highFilter;
+
+      // 3. DynamicsCompressor acts as studio limiter
       const compressor = ctx.createDynamicsCompressor();
       compressor.threshold.setValueAtTime(-6, ctx.currentTime);
       compressor.knee.setValueAtTime(10, ctx.currentTime);
@@ -43,21 +72,28 @@ export function useAudioProcessor(inputStream) {
       compressor.release.setValueAtTime(0.25, ctx.currentTime);
       compressorNodeRef.current = compressor;
 
+      // 4. Analyser
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.6;
       analyserNodeRef.current = analyser;
 
+      // 5. Destination for MediaRecorder stream
       const destination = ctx.createMediaStreamDestination();
       destinationNodeRef.current = destination;
 
-      // Connect nodes
+      // Chain audio graph:
+      // source -> gain -> lowFilter -> midFilter -> highFilter -> (compressor) -> analyser -> destination
       source.connect(gainNode);
+      gainNode.connect(lowFilter);
+      lowFilter.connect(midFilter);
+      midFilter.connect(highFilter);
+
       if (limiterEnabled) {
-        gainNode.connect(compressor);
+        highFilter.connect(compressor);
         compressor.connect(analyser);
       } else {
-        gainNode.connect(analyser);
+        highFilter.connect(analyser);
       }
       analyser.connect(destination);
 
@@ -106,6 +142,28 @@ export function useAudioProcessor(inputStream) {
     }
   }, [isMuted]);
 
+  // Handle EQ changes
+  const updateBass = useCallback((val) => {
+    setBass(val);
+    if (lowFilterRef.current && audioContextRef.current) {
+      lowFilterRef.current.gain.setTargetAtTime(val, audioContextRef.current.currentTime, 0.05);
+    }
+  }, []);
+
+  const updateMid = useCallback((val) => {
+    setMid(val);
+    if (midFilterRef.current && audioContextRef.current) {
+      midFilterRef.current.gain.setTargetAtTime(val, audioContextRef.current.currentTime, 0.05);
+    }
+  }, []);
+
+  const updateTreble = useCallback((val) => {
+    setTreble(val);
+    if (highFilterRef.current && audioContextRef.current) {
+      highFilterRef.current.gain.setTargetAtTime(val, audioContextRef.current.currentTime, 0.05);
+    }
+  }, []);
+
   // Handle Mute toggle
   const toggleMute = useCallback(() => {
     setIsMuted(prev => {
@@ -122,15 +180,15 @@ export function useAudioProcessor(inputStream) {
   const toggleLimiter = useCallback(() => {
     setLimiterEnabled(prev => {
       const next = !prev;
-      if (gainNodeRef.current && analyserNodeRef.current && compressorNodeRef.current) {
+      if (highFilterRef.current && analyserNodeRef.current && compressorNodeRef.current) {
         try {
-          gainNodeRef.current.disconnect();
+          highFilterRef.current.disconnect();
           if (next) {
-            gainNodeRef.current.connect(compressorNodeRef.current);
+            highFilterRef.current.connect(compressorNodeRef.current);
             compressorNodeRef.current.connect(analyserNodeRef.current);
           } else {
             compressorNodeRef.current.disconnect();
-            gainNodeRef.current.connect(analyserNodeRef.current);
+            highFilterRef.current.connect(analyserNodeRef.current);
           }
         } catch (err) {
           console.warn('[AudioProcessor] Limiter reconnect error:', err);
@@ -138,6 +196,35 @@ export function useAudioProcessor(inputStream) {
       }
       return next;
     });
+  }, []);
+
+  // Play soundboard effect through live stream destination AND local speaker
+  const playSoundToStream = useCallback((audioUrl) => {
+    try {
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+
+      const audio = new Audio(audioUrl);
+      audio.crossOrigin = 'anonymous';
+      const source = ctx.createMediaElementSource(audio);
+
+      // Connect to local speakers so streamer hears it
+      source.connect(ctx.destination);
+
+      // Connect to destination node so live stream viewers hear it too
+      if (destinationNodeRef.current) {
+        source.connect(destinationNodeRef.current);
+      }
+
+      audio.play().catch(err => {
+        // Fallback standard audio
+        const fallbackAudio = new Audio(audioUrl);
+        fallbackAudio.play().catch(() => {});
+      });
+    } catch (err) {
+      const fallbackAudio = new Audio(audioUrl);
+      fallbackAudio.play().catch(() => {});
+    }
   }, []);
 
   // Return processed stream track
@@ -160,6 +247,13 @@ export function useAudioProcessor(inputStream) {
     toggleMute,
     limiterEnabled,
     toggleLimiter,
+    bass,
+    updateBass,
+    mid,
+    updateMid,
+    treble,
+    updateTreble,
+    playSoundToStream,
     vuLevel: isMuted ? 0 : vuLevel,
     isClipping: isMuted ? false : isClipping,
     getProcessedStream

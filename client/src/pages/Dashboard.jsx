@@ -3,6 +3,7 @@ import { useSocket } from '../hooks/useSocket';
 import { useWebRTC } from '../hooks/useWebRTC';
 import { useAudioProcessor } from '../hooks/useAudioProcessor';
 import { AudioMixer } from '../components/AudioMixer';
+import { MyinstantsSoundboard } from '../components/MyinstantsSoundboard';
 import { YouTubeLivePanel } from '../components/YouTubeLivePanel';
 import { StreamControls } from '../components/StreamControls';
 import { PrivacyScreen } from '../components/PrivacyOverlay';
@@ -19,7 +20,11 @@ import {
   Volume2, 
   VolumeX, 
   Users,
-  EyeOff
+  EyeOff,
+  Share2,
+  Check,
+  Smartphone,
+  Monitor
 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 
@@ -28,6 +33,9 @@ export function Dashboard() {
 
   // Tab navigation: 'preview' | 'comments' | 'volume' | 'broadcast'
   const [activeTab, setActiveTab] = useState('preview');
+
+  // Camera orientation: 'portrait' (9:16) or 'landscape' (16:9)
+  const [aspectRatio, setAspectRatio] = useState('landscape');
 
   // Stream state
   const [isStreaming, setIsStreaming] = useState(false);
@@ -49,6 +57,9 @@ export function Dashboard() {
   // Standby / Jeda layar
   const [isPrivacyActive, setIsPrivacyActive] = useState(false);
 
+  // Share Toast notification
+  const [shareToast, setShareToast] = useState(false);
+
   // Config & Modals
   const [config, setConfig] = useState(null);
   const [networkInfo, setNetworkInfo] = useState(null);
@@ -68,7 +79,7 @@ export function Dashboard() {
 
   const activeStream = cameraSource === 'remote' ? remoteStream : localStream;
 
-  // Web Audio hook
+  // Web Audio hook with 3-band EQ and Soundboard mixer
   const {
     gain,
     setGain,
@@ -76,6 +87,13 @@ export function Dashboard() {
     toggleMute,
     limiterEnabled,
     toggleLimiter,
+    bass,
+    updateBass,
+    mid,
+    updateMid,
+    treble,
+    updateTreble,
+    playSoundToStream,
     vuLevel,
     isClipping,
     getProcessedStream
@@ -94,9 +112,8 @@ export function Dashboard() {
       if (isStreaming && 'wakeLock' in navigator) {
         try {
           wakeLockRef.current = await navigator.wakeLock.request('screen');
-          console.log('[Dashboard] Screen wake lock acquired for streaming');
         } catch (err) {
-          console.warn('[Dashboard] Wake lock error:', err.message);
+          console.warn('[Dashboard] Wake lock notice:', err.message);
         }
       }
     }
@@ -110,17 +127,18 @@ export function Dashboard() {
     };
   }, [isStreaming]);
 
-  // Init local camera (runs once and stays active)
-  const initLocalCamera = async (facing) => {
+  // Init local camera with orientation constraints
+  const initLocalCamera = async (facing, ratio) => {
     if (localStream) {
       localStream.getTracks().forEach(t => t.stop());
     }
     try {
+      const isPortrait = ratio === 'portrait';
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: facing },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: isPortrait ? 720 : 1280 },
+          height: { ideal: isPortrait ? 1280 : 720 },
           frameRate: { ideal: 30 }
         },
         audio: {
@@ -143,18 +161,22 @@ export function Dashboard() {
 
   useEffect(() => {
     if (cameraSource === 'local') {
-      initLocalCamera(facingMode);
+      initLocalCamera(facingMode, aspectRatio);
     }
     return () => {
       if (localStream) {
         localStream.getTracks().forEach(t => t.stop());
       }
     };
-  }, [cameraSource, facingMode]);
+  }, [cameraSource, facingMode, aspectRatio]);
 
   const toggleCameraFacing = () => {
     setTorchOn(false);
     setFacingMode(prev => (prev === 'environment' ? 'user' : 'environment'));
+  };
+
+  const toggleOrientation = () => {
+    setAspectRatio(prev => (prev === 'landscape' ? 'portrait' : 'landscape'));
   };
 
   const toggleTorch = async () => {
@@ -167,6 +189,50 @@ export function Dashboard() {
         setTorchOn(next);
       } catch (err) {
         console.warn('Torch error:', err);
+      }
+    }
+  };
+
+  // Turn off hardware camera sensor and microphone when privacy is activated
+  const handleTogglePrivacy = () => {
+    setIsPrivacyActive(prev => {
+      const next = !prev;
+      // Disable physical camera track and audio track so camera sensor shuts down
+      if (localStream) {
+        localStream.getVideoTracks().forEach(track => {
+          track.enabled = !next;
+        });
+        localStream.getAudioTracks().forEach(track => {
+          track.enabled = !next;
+        });
+      }
+      return next;
+    });
+  };
+
+  // Share Live Stream link
+  const handleShareLink = async () => {
+    const shareUrl = activeVideoId 
+      ? `https://www.youtube.com/watch?v=${activeVideoId}`
+      : (config?.youtubeChannel ? `https://www.youtube.com/@${config.youtubeChannel.replace(/^@/, '')}/live` : window.location.href);
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Live Stream YouTube',
+          text: 'Tonton siaran langsung saya di YouTube!',
+          url: shareUrl
+        });
+      } catch (err) {
+        // User dismiss
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        setShareToast(true);
+        setTimeout(() => setShareToast(false), 2500);
+      } catch (err) {
+        // clipboard error
       }
     }
   };
@@ -246,15 +312,6 @@ export function Dashboard() {
     }
   }, [activeStream]);
 
-  const handleTogglePrivacy = () => {
-    setIsPrivacyActive(prev => {
-      const next = !prev;
-      if (next && !isMuted) toggleMute();
-      else if (!next && isMuted) toggleMute();
-      return next;
-    });
-  };
-
   // Start Live Stream via safe apiFetch & ArrayBuffer chunk stream
   const handleStartStream = async () => {
     setIsLoadingStream(true);
@@ -291,7 +348,6 @@ export function Dashboard() {
           }
         };
 
-        // 350ms slices for smooth continuous transmission
         recorder.start(350);
         mediaRecorderRef.current = recorder;
       }
@@ -354,7 +410,7 @@ export function Dashboard() {
             </span>
           </div>
 
-          {/* Viewers Badge */}
+          {/* Real Viewers Badge from YouTube */}
           <div className="flex items-center gap-1.5 text-[11px] font-mono text-[#aaaaaa]">
             <Users className="w-3.5 h-3.5" />
             <span>{ytStats.viewerCount.toLocaleString()}</span>
@@ -362,7 +418,17 @@ export function Dashboard() {
         </div>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {/* Share Link Button */}
+          <button
+            type="button"
+            onClick={handleShareLink}
+            className="p-1.5 text-[#aaaaaa] hover:text-[#f1f1f1] rounded-lg transition relative"
+            title="Bagikan Tautan Siaran"
+          >
+            <Share2 className="w-4 h-4" />
+          </button>
+
           {/* Standby Screen Toggle */}
           <button
             type="button"
@@ -372,7 +438,7 @@ export function Dashboard() {
                 ? 'bg-[#eab308]/20 text-[#eab308] border-[#eab308]/40'
                 : 'text-[#aaaaaa] hover:text-[#f1f1f1] border-transparent'
             }`}
-            title="Jeda Layar"
+            title="Jeda Layar & Matikan Kamera"
           >
             <EyeOff className="w-4 h-4" />
           </button>
@@ -389,12 +455,24 @@ export function Dashboard() {
         </div>
       </header>
 
-      {/* Main Content: Persistent Camera Viewfinder to avoid browser stream teardown */}
+      {/* Share Toast */}
+      {shareToast && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-[#222222] border border-[#333333] text-white px-4 py-2 rounded-lg text-xs flex items-center gap-2 shadow-xl animate-in fade-in slide-in-from-top-2">
+          <Check className="w-3.5 h-3.5 text-[#22c55e]" />
+          <span>Tautan live stream disalin ke clipboard!</span>
+        </div>
+      )}
+
+      {/* Main Content: Persistent Camera Viewfinder */}
       <main className="flex-1 p-3 sm:p-4 max-w-2xl w-full mx-auto pb-20 overflow-y-auto">
-        {/* ================= TAB 1: KAMERA (PERSISTENT DOM) ================= */}
+        {/* ================= TAB 1: KAMERA ================= */}
         <div className={activeTab === 'preview' ? 'flex flex-col gap-3' : 'hidden'}>
-          {/* Viewfinder Video Frame */}
-          <div className="relative w-full aspect-[4/3] sm:aspect-video bg-black rounded-xl overflow-hidden border border-[#1f1f1f] flex items-center justify-center">
+          {/* Viewfinder Video Frame with Dynamic Aspect Ratio */}
+          <div className={`relative bg-black rounded-xl overflow-hidden border border-[#1f1f1f] flex items-center justify-center transition-all duration-300 ${
+            aspectRatio === 'portrait'
+              ? 'aspect-[9/16] max-w-[340px] mx-auto w-full'
+              : 'aspect-[4/3] sm:aspect-video w-full'
+          }`}>
             <video
               ref={previewVideoRef}
               autoPlay
@@ -403,6 +481,7 @@ export function Dashboard() {
               className={`w-full h-full object-cover ${cameraSource === 'local' && facingMode === 'user' ? '-scale-x-100' : ''}`}
             />
 
+            {/* Standby Screen Overlay */}
             {isPrivacyActive && (
               <PrivacyScreen privacyText={config?.privacyText || 'STANDBY'} />
             )}
@@ -449,33 +528,46 @@ export function Dashboard() {
                 </button>
               </div>
 
-              {/* Local Hardware Controls */}
-              {cameraSource === 'local' && (
-                <div className="flex items-center gap-1.5">
-                  {hasTorch && (
+              {/* Orientation Toggle & Camera Controls */}
+              <div className="flex items-center gap-1.5">
+                {/* Orientation Toggle (Portrait 9:16 vs Landscape 16:9) */}
+                <button
+                  type="button"
+                  onClick={toggleOrientation}
+                  className="px-2 py-1.5 rounded-lg bg-black/80 text-[#aaaaaa] hover:text-white border border-[#333333] flex items-center gap-1 text-[11px] font-mono transition"
+                  title="Ganti Rasio 9:16 / 16:9"
+                >
+                  {aspectRatio === 'portrait' ? <Smartphone className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+                  <span>{aspectRatio === 'portrait' ? '9:16' : '16:9'}</span>
+                </button>
+
+                {cameraSource === 'local' && (
+                  <>
+                    {hasTorch && (
+                      <button
+                        type="button"
+                        onClick={toggleTorch}
+                        className={`p-2 rounded-lg border transition ${
+                          torchOn
+                            ? 'bg-[#eab308] text-black border-[#eab308]'
+                            : 'bg-black/80 text-[#aaaaaa] border-[#333333]'
+                        }`}
+                        title="Flash"
+                      >
+                        {torchOn ? <Zap className="w-3.5 h-3.5" /> : <ZapOff className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={toggleTorch}
-                      className={`p-2 rounded-lg border transition ${
-                        torchOn
-                          ? 'bg-[#eab308] text-black border-[#eab308]'
-                          : 'bg-black/80 text-[#aaaaaa] border-[#333333]'
-                      }`}
-                      title="Flash"
+                      onClick={toggleCameraFacing}
+                      className="p-2 rounded-lg bg-black/80 text-[#aaaaaa] hover:text-white border border-[#333333] active:scale-95 transition"
+                      title="Balik Kamera"
                     >
-                      {torchOn ? <Zap className="w-3.5 h-3.5" /> : <ZapOff className="w-3.5 h-3.5" />}
+                      <FlipHorizontal className="w-3.5 h-3.5" />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={toggleCameraFacing}
-                    className="p-2 rounded-lg bg-black/80 text-[#aaaaaa] hover:text-white border border-[#333333] active:scale-95 transition"
-                    title="Balik Kamera"
-                  >
-                    <FlipHorizontal className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
@@ -491,7 +583,7 @@ export function Dashboard() {
               }`}
             >
               <EyeOff className="w-3.5 h-3.5" />
-              <span>{isPrivacyActive ? 'Layar Dijeda' : 'Jeda Layar'}</span>
+              <span>{isPrivacyActive ? 'Layar & Kamera Mati' : 'Jeda Layar (Mati)'}</span>
             </button>
 
             <button
@@ -521,9 +613,9 @@ export function Dashboard() {
           </div>
         )}
 
-        {/* ================= TAB 3: AUDIO MIXER ================= */}
+        {/* ================= TAB 3: AUDIO MIXER ADVANCE & SOUNDBOARD ================= */}
         {activeTab === 'volume' && (
-          <div>
+          <div className="space-y-3">
             <AudioMixer
               gain={gain}
               setGain={setGain}
@@ -531,10 +623,19 @@ export function Dashboard() {
               toggleMute={toggleMute}
               limiterEnabled={limiterEnabled}
               toggleLimiter={toggleLimiter}
+              bass={bass}
+              updateBass={updateBass}
+              mid={mid}
+              updateMid={updateMid}
+              treble={treble}
+              updateTreble={updateTreble}
               vuLevel={vuLevel}
               isClipping={isClipping}
               inputLabel={cameraSource === 'local' ? 'Mikrofon HP' : 'HP Kedua'}
             />
+
+            {/* Soundboard Myinstants */}
+            <MyinstantsSoundboard onPlaySound={playSoundToStream} />
           </div>
         )}
 
@@ -564,6 +665,7 @@ export function Dashboard() {
               <div className="font-mono text-[11px] text-[#717171] space-y-1">
                 <div>Channel: {config?.youtubeChannel || '(Belum diset)'}</div>
                 <div>Target: {config?.rtmpUrl || 'rtmp://a.rtmp.youtube.com/live2'}</div>
+                <div>Orientasi: {aspectRatio === 'portrait' ? '9:16 Vertikal (Shorts)' : '16:9 Horisontal'}</div>
                 <div>Resolusi: {config?.resolution || '720p'} @ {config?.fps || 30} FPS</div>
               </div>
             </div>

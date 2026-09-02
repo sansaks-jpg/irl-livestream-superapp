@@ -1,5 +1,5 @@
-import React from 'react';
-import { Volume2, VolumeX, Shield, Mic, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Volume2, VolumeX, Shield, Mic, AlertCircle, SlidersHorizontal, ChevronDown, ChevronUp } from 'lucide-react';
 
 export function AudioMixer({
   gain = 1.0,
@@ -8,10 +8,17 @@ export function AudioMixer({
   toggleMute,
   limiterEnabled = true,
   toggleLimiter,
+  bass = 0,
+  updateBass,
+  mid = 0,
+  updateMid,
+  treble = 0,
+  updateTreble,
   vuLevel = 0,
   isClipping = false,
   inputLabel = 'Mikrofon'
 }) {
+  const [showEq, setShowEq] = useState(false);
   const dbValue = gain > 0 ? (20 * Math.log10(gain)).toFixed(1) : '-inf';
 
   return (
@@ -21,7 +28,7 @@ export function AudioMixer({
         <div className="flex items-center gap-2">
           <Mic className="w-4 h-4 text-[#aaaaaa]" />
           <span className="text-xs font-semibold uppercase tracking-wider text-[#f1f1f1]">
-            Mixer Audio
+            Mixer Audio Studio
           </span>
         </div>
         <span className="text-[11px] font-mono text-[#717171]">
@@ -62,10 +69,10 @@ export function AudioMixer({
         </div>
       </div>
 
-      {/* Gain Fader */}
+      {/* Master Gain Fader */}
       <div className="space-y-2">
         <div className="flex justify-between items-center text-xs">
-          <span className="text-[#aaaaaa] font-medium">Gain Fader</span>
+          <span className="text-[#aaaaaa] font-medium">Master Gain Fader</span>
           <span className="font-mono font-semibold px-2 py-0.5 bg-[#181818] rounded border border-[#272727] text-[#f1f1f1]">
             {gain >= 1 ? `+${dbValue}` : dbValue} dB ({Math.round(gain * 100)}%)
           </span>
@@ -106,6 +113,76 @@ export function AudioMixer({
             +6 dB
           </button>
         </div>
+      </div>
+
+      {/* 3-Band Studio EQ Accordion */}
+      <div className="border border-[#222222] rounded-lg overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowEq(!showEq)}
+          className="w-full px-3 py-2 bg-[#141414] hover:bg-[#1a1a1a] flex items-center justify-between text-xs text-[#aaaaaa] hover:text-[#f1f1f1] transition"
+        >
+          <div className="flex items-center gap-1.5 font-medium">
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <span>3-Band Studio Equalizer (EQ)</span>
+          </div>
+          {showEq ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {showEq && (
+          <div className="p-3 bg-[#0a0a0a] space-y-3 border-t border-[#222222]">
+            {/* Bass */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-[#aaaaaa]">
+                <span>Bass (150 Hz)</span>
+                <span className="font-mono">{bass > 0 ? `+${bass}` : bass} dB</span>
+              </div>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                step="1"
+                value={bass}
+                onChange={(e) => updateBass && updateBass(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-[#222222] rounded appearance-none cursor-pointer accent-[#f1f1f1]"
+              />
+            </div>
+
+            {/* Mid */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-[#aaaaaa]">
+                <span>Vokal Mid (1.2 kHz)</span>
+                <span className="font-mono">{mid > 0 ? `+${mid}` : mid} dB</span>
+              </div>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                step="1"
+                value={mid}
+                onChange={(e) => updateMid && updateMid(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-[#222222] rounded appearance-none cursor-pointer accent-[#f1f1f1]"
+              />
+            </div>
+
+            {/* Treble */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-[#aaaaaa]">
+                <span>Treble (6 kHz)</span>
+                <span className="font-mono">{treble > 0 ? `+${treble}` : treble} dB</span>
+              </div>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                step="1"
+                value={treble}
+                onChange={(e) => updateTreble && updateTreble(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-[#222222] rounded appearance-none cursor-pointer accent-[#f1f1f1]"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Hardware Toggles: Mute & Limiter */}

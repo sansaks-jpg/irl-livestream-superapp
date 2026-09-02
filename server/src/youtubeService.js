@@ -127,18 +127,48 @@ class YouTubeService extends EventEmitter {
   async poll() {
     if (!this.currentVideoId) return;
     try {
-      // In production without quota limits, you can fetch live chat or HTML stream
-      // We will emulate live stats update
-      this.viewerCount = Math.max(1, this.viewerCount + Math.floor(Math.random() * 5) - 2);
-      this.likes = Math.max(1, this.likes + Math.floor(Math.random() * 2));
-      
+      const res = await fetch(`https://www.youtube.com/watch?v=${this.currentVideoId}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9'
+        }
+      });
+      const html = await res.text();
+
+      // Extract real concurrent viewers
+      let viewers = 0;
+      const cvMatch = html.match(/"concurrentViewers":"([0-9,]+)"/);
+      if (cvMatch) {
+        viewers = parseInt(cvMatch[1].replace(/,/g, ''), 10);
+      } else {
+        const runMatch = html.match(/"runs":\[{"text":"([0-9,.]+)"},{"text":" watching now"}/);
+        if (runMatch) {
+          viewers = parseInt(runMatch[1].replace(/,/g, ''), 10);
+        } else {
+          const labelMatch = html.match(/"label":"([0-9,]+) watching now"/);
+          if (labelMatch) {
+            viewers = parseInt(labelMatch[1].replace(/,/g, ''), 10);
+          }
+        }
+      }
+
+      // Extract real likes
+      let likes = 0;
+      const likeMatch = html.match(/"likeCount":"([0-9,]+)"/) || html.match(/"label":"([0-9,.]+) likes"/);
+      if (likeMatch) {
+        likes = parseInt(likeMatch[1].replace(/,/g, ''), 10);
+      }
+
+      this.viewerCount = isNaN(viewers) ? 0 : viewers;
+      this.likes = isNaN(likes) ? 0 : likes;
+
       this.emit('stats', {
         viewerCount: this.viewerCount,
         likes: this.likes,
         videoId: this.currentVideoId
       });
     } catch (err) {
-      console.error('[YouTubeService] Poll error:', err.message);
+      console.warn('[YouTubeService] Real poll notice:', err.message);
     }
   }
 
