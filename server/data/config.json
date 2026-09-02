@@ -1,0 +1,16 @@
+{
+  "rtmpUrl": "rtmp://a.rtmp.youtube.com/live2",
+  "streamKey": "",
+  "resolution": "1280x720",
+  "fps": 30,
+  "videoBitrate": "3000k",
+  "audioBitrate": "128k",
+  "audioGain": 1,
+  "audioLimiterEnabled": true,
+  "audioLimiterThreshold": -6,
+  "youtubeVideoId": "",
+  "obsEnabled": false,
+  "obsUrl": "ws://localhost:4455",
+  "obsPassword": "",
+  "privacyText": "BRB - SINYAL GANGGUAN / PRIVACY SHIELD"
+}

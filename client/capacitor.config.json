@@ -1,0 +1,12 @@
+{
+  "appId": "com.irl.livestream",
+  "appName": "IRL Stream Master",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
