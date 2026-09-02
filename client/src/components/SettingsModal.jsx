@@ -3,18 +3,17 @@ import { QRCodeSVG } from 'qrcode.react';
 import { 
   X, 
   Settings, 
-  Key, 
   Radio, 
   Smartphone, 
   Copy, 
   Check, 
-  Tv, 
-  Sliders, 
   Eye, 
   EyeOff, 
   Save,
-  HelpCircle
+  Search,
+  Server
 } from 'lucide-react';
+import { getServerUrl, setServerUrl, apiFetch } from '../utils/api';
 
 export function SettingsModal({
   isOpen,
@@ -26,20 +25,21 @@ export function SettingsModal({
   const [formData, setFormData] = useState({
     rtmpUrl: 'rtmp://a.rtmp.youtube.com/live2',
     streamKey: '',
+    youtubeChannel: '',
     youtubeVideoId: '',
     resolution: '1280x720',
     fps: 30,
     videoBitrate: '3000k',
     audioBitrate: '128k',
-    privacyText: 'BRB - SINYAL GANGGUAN / SEGERA KEMBALI',
-    obsEnabled: false,
-    obsUrl: 'ws://localhost:4455',
-    obsPassword: ''
+    privacyText: 'STANDBY'
   });
 
+  const [backendUrl, setBackendUrl] = useState(getServerUrl());
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [detectStatus, setDetectStatus] = useState(null);
+  const [isDetecting, setIsDetecting] = useState(false);
 
   useEffect(() => {
     if (config) {
@@ -57,215 +57,181 @@ export function SettingsModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleDetectLive = async () => {
+    if (!formData.youtubeChannel) {
+      setDetectStatus('Masukkan handle YouTube terlebih dahulu');
+      return;
+    }
+    setIsDetecting(true);
+    setDetectStatus('Mencari siaran langsung...');
+    try {
+      const data = await apiFetch(`/api/youtube/auto-detect?channel=${encodeURIComponent(formData.youtubeChannel)}`);
+      if (data.isLive && data.videoId) {
+        setFormData(p => ({ ...p, youtubeVideoId: data.videoId }));
+        setDetectStatus(`Siaran aktif ditemukan: ${data.videoId}`);
+      } else {
+        setDetectStatus('Tidak ada live stream yang sedang aktif di channel ini');
+      }
+    } catch (err) {
+      setDetectStatus(`Gagal cek live: ${err.message}`);
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
+    setServerUrl(backendUrl);
     onSaveConfig(formData);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
       onClose();
-    }, 1000);
+    }, 800);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col my-8">
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-[#0f0f0f] border border-[#272727] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col my-6">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">
-              <Settings className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-slate-100">Pengaturan Superapp IRL</h2>
-              <p className="text-xs text-slate-400">Konfigurasi YouTube Live, Remote Cam HP, dan Broadcast</p>
-            </div>
-          </div>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#222222]">
+          <span className="text-sm font-bold text-[#f1f1f1] uppercase tracking-wider">
+            Pengaturan
+          </span>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition"
+            className="p-1 text-[#aaaaaa] hover:text-[#f1f1f1] rounded transition"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-6 overflow-y-auto max-h-[75vh]">
-          {/* Section: Remote HP Camera Pairing */}
-          <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row gap-4 items-center">
-            <div className="bg-white p-2.5 rounded-xl shadow-md shrink-0">
-              <QRCodeSVG value={camUrl} size={118} />
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto max-h-[75vh] text-xs">
+          {/* Server Backend IP */}
+          <div className="space-y-1.5 pb-3 border-b border-[#222222]">
+            <div className="flex items-center justify-between">
+              <label className="text-[#aaaaaa] font-medium flex items-center gap-1.5">
+                <Server className="w-3.5 h-3.5 text-[#3ea6ff]" />
+                <span>Alamat Server Komputer (Backend)</span>
+              </label>
             </div>
-            <div className="space-y-2 flex-1 text-left">
-              <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs uppercase tracking-wider">
-                <Smartphone className="w-4 h-4" />
-                <span>Hubungkan HP Kamera (Phone Cam)</span>
-              </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Scan QR Code ini menggunakan HP kamera Anda atau buka alamat di bawah pada browser HP (Chrome/Safari) untuk streaming video & audio nirkabel latensi sangat rendah:
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={camUrl}
-                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 font-mono focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleCopyCamUrl}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copied ? 'Tersalin' : 'Salin'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Section: YouTube RTMP & Stream Key */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-rose-400 font-semibold text-xs uppercase tracking-wider">
-              <Radio className="w-4 h-4" />
-              <span>Target Broadcast YouTube Live</span>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  RTMP Server URL
-                </label>
-                <input
-                  type="text"
-                  value={formData.rtmpUrl}
-                  onChange={(e) => setFormData(p => ({ ...p, rtmpUrl: e.target.value }))}
-                  placeholder="rtmp://a.rtmp.youtube.com/live2"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs font-medium text-slate-300">
-                    YouTube Stream Key
-                  </label>
-                  <span className="text-[10px] text-slate-500">
-                    *Kosongkan atau isi "test" untuk uji coba offline tanpa live sungguhan
-                  </span>
-                </div>
-                <div className="relative">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={formData.streamKey}
-                    onChange={(e) => setFormData(p => ({ ...p, streamKey: e.target.value }))}
-                    placeholder="xxxx-xxxx-xxxx-xxxx-xxxx"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 pr-10 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
-                  >
-                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  YouTube Live Video ID / URL (Untuk Live Chat Realtime)
-                </label>
-                <input
-                  type="text"
-                  value={formData.youtubeVideoId}
-                  onChange={(e) => setFormData(p => ({ ...p, youtubeVideoId: e.target.value }))}
-                  placeholder="Contoh: dQw4w9WgXcQ atau https://www.youtube.com/watch?v=..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Stream Quality & Bitrate */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs uppercase tracking-wider">
-              <Sliders className="w-4 h-4" />
-              <span>Resolusi & Bitrate Encoding FFmpeg</span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Preset Resolusi</label>
-                <select
-                  value={formData.resolution}
-                  onChange={(e) => setFormData(p => ({ ...p, resolution: e.target.value }))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="1280x720">720p HD (16:9)</option>
-                  <option value="1920x1080">1080p FHD (16:9)</option>
-                  <option value="720x1280">720x1280 Portrait (Shorts/TikTok)</option>
-                  <option value="1080x1920">1080x1920 Portrait FHD</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Framerate (FPS)</label>
-                <select
-                  value={formData.fps}
-                  onChange={(e) => setFormData(p => ({ ...p, fps: parseInt(e.target.value, 10) }))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="30">30 FPS (Hemat Kuota IRL)</option>
-                  <option value="60">60 FPS (Super Smooth)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Video Bitrate</label>
-                <select
-                  value={formData.videoBitrate}
-                  onChange={(e) => setFormData(p => ({ ...p, videoBitrate: e.target.value }))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="2000k">2000 kbps (Sinyal Lemah)</option>
-                  <option value="3000k">3000 kbps (Standar 720p)</option>
-                  <option value="4500k">4500 kbps (Bagus 1080p)</option>
-                  <option value="6000k">6000 kbps (Ultra 60FPS)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Text Privacy Shield */}
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">
-              Teks Layar Darurat BRB / Sinyal Gangguan
-            </label>
             <input
               type="text"
-              value={formData.privacyText}
-              onChange={(e) => setFormData(p => ({ ...p, privacyText: e.target.value }))}
-              placeholder="BRB - SINYAL GANGGUAN / SEGERA KEMBALI"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              value={backendUrl}
+              onChange={(e) => setBackendUrl(e.target.value)}
+              placeholder="http://192.168.100.11:5000"
+              className="w-full bg-[#050505] border border-[#272727] rounded-lg px-3 py-2 text-[#f1f1f1] font-mono focus:outline-none focus:border-[#3ea6ff]"
             />
+            <span className="text-[10px] text-[#717171] block">
+              Alamat IP komputer laptop Anda yang menjalankan server `npm start`.
+            </span>
+          </div>
+
+          {/* YouTube Channel Handle (Auto-detect comments) */}
+          <div className="space-y-1.5 pb-3 border-b border-[#222222]">
+            <div className="flex items-center justify-between">
+              <label className="text-[#aaaaaa] font-medium flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-[#cc0000]" />
+                <span>Handle Channel YouTube (Otomatis Ambil Komen)</span>
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={formData.youtubeChannel}
+                onChange={(e) => setFormData(p => ({ ...p, youtubeChannel: e.target.value }))}
+                placeholder="Contoh: @sansaks"
+                className="flex-1 bg-[#050505] border border-[#272727] rounded-lg px-3 py-2 text-[#f1f1f1] font-mono focus:outline-none focus:border-[#cc0000]"
+              />
+              <button
+                type="button"
+                onClick={handleDetectLive}
+                disabled={isDetecting}
+                className="px-3 py-2 bg-[#222222] hover:bg-[#333333] text-[#f1f1f1] rounded-lg font-medium flex items-center gap-1.5 transition shrink-0"
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>{isDetecting ? 'Mencari...' : 'Cek Live'}</span>
+              </button>
+            </div>
+            {detectStatus && (
+              <span className="text-[10px] text-[#3ea6ff] block font-mono">
+                {detectStatus}
+              </span>
+            )}
+            <span className="text-[10px] text-[#717171] block">
+              Cukup masukkan handle channel sekali. Komentar live stream akan diambil otomatis tanpa input ID manual.
+            </span>
+          </div>
+
+          {/* YouTube Stream Key */}
+          <div className="space-y-1.5 pb-3 border-b border-[#222222]">
+            <label className="text-[#aaaaaa] font-medium block">
+              YouTube Stream Key (Kunci Streaming)
+            </label>
+            <div className="relative">
+              <input
+                type={showKey ? 'text' : 'password'}
+                value={formData.streamKey}
+                onChange={(e) => setFormData(p => ({ ...p, streamKey: e.target.value }))}
+                placeholder="xxxx-xxxx-xxxx-xxxx-xxxx"
+                className="w-full bg-[#050505] border border-[#272727] rounded-lg px-3 py-2 pr-9 text-[#f1f1f1] font-mono focus:outline-none focus:border-[#cc0000]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey(!showKey)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#717171] hover:text-[#f1f1f1]"
+              >
+                {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+            <span className="text-[10px] text-[#717171] block">
+              Kosongkan atau isi "test" untuk uji coba lokal tanpa siaran sungguhan.
+            </span>
+          </div>
+
+          {/* Resolusi & Bitrate */}
+          <div className="grid grid-cols-2 gap-3 pb-3 border-b border-[#222222]">
+            <div>
+              <label className="text-[#aaaaaa] font-medium block mb-1">Resolusi</label>
+              <select
+                value={formData.resolution}
+                onChange={(e) => setFormData(p => ({ ...p, resolution: e.target.value }))}
+                className="w-full bg-[#050505] border border-[#272727] rounded-lg px-2.5 py-1.5 text-[#f1f1f1] focus:outline-none"
+              >
+                <option value="1280x720">720p HD</option>
+                <option value="1920x1080">1080p FHD</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[#aaaaaa] font-medium block mb-1">Bitrate Video</label>
+              <select
+                value={formData.videoBitrate}
+                onChange={(e) => setFormData(p => ({ ...p, videoBitrate: e.target.value }))}
+                className="w-full bg-[#050505] border border-[#272727] rounded-lg px-2.5 py-1.5 text-[#f1f1f1] focus:outline-none"
+              >
+                <option value="2500k">2500 kbps (Hemat Kuota)</option>
+                <option value="4000k">4000 kbps (Standar)</option>
+                <option value="6000k">6000 kbps (Maksimal)</option>
+              </select>
+            </div>
           </div>
 
           {/* Footer Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+          <div className="flex items-center justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition"
+              className="px-4 py-2 bg-[#181818] hover:bg-[#252525] text-[#aaaaaa] rounded-lg text-xs transition"
             >
               Batal
             </button>
             <button
               type="submit"
-              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-lg shadow-indigo-900/30"
+              className="px-5 py-2 bg-[#f1f1f1] hover:bg-white text-black rounded-lg text-xs font-bold transition"
             >
-              <Save className="w-4 h-4" />
-              <span>{savedSuccess ? 'Tersimpan!' : 'Simpan Pengaturan'}</span>
+              {savedSuccess ? 'Tersimpan' : 'Simpan'}
             </button>
           </div>
         </form>

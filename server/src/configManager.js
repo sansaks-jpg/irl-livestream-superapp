@@ -14,10 +14,11 @@ const DEFAULT_CONFIG = {
   audioLimiterEnabled: true,
   audioLimiterThreshold: -6,
   youtubeVideoId: '',
+  youtubeChannel: '',
   obsEnabled: false,
   obsUrl: 'ws://localhost:4455',
   obsPassword: '',
-  privacyText: 'BRB - SINYAL GANGGUAN / PRIVACY SHIELD'
+  privacyText: 'STANDBY'
 };
 
 class ConfigManager {

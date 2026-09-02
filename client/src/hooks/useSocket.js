@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { getServerUrl } from '../utils/api';
 
 export function useSocket() {
   const [isConnected, setIsConnected] = useState(false);
@@ -7,10 +8,10 @@ export function useSocket() {
   const socketRef = useRef(null);
 
   useEffect(() => {
-    // Connect to same host or proxy
-    const socket = io(window.location.origin, {
+    const serverUrl = getServerUrl();
+    const socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 15,
       reconnectionDelay: 1000
     });
 

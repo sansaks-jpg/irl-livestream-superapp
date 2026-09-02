@@ -60,6 +60,60 @@ class YouTubeService extends EventEmitter {
     this.startPolling();
   }
 
+  async detectLiveFromHandle(channelHandle) {
+    if (!channelHandle) return null;
+    let handle = channelHandle.trim();
+    if (!handle.startsWith('@') && !handle.startsWith('http')) {
+      handle = `@${handle}`;
+    }
+    const targetUrl = handle.startsWith('http') ? handle : `https://www.youtube.com/${handle}/live`;
+    console.log(`[YouTubeService] Auto-detecting live stream for: ${targetUrl}`);
+
+    try {
+      const res = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        redirect: 'follow'
+      });
+
+      const finalUrl = res.url || '';
+      // Check if redirected to watch?v=
+      const urlMatch = finalUrl.match(/v=([a-zA-Z0-9_-]{11})/);
+      if (urlMatch) {
+        const videoId = urlMatch[1];
+        console.log(`[YouTubeService] Auto-detected Live Video ID from URL: ${videoId}`);
+        this.setVideoId(videoId);
+        return videoId;
+      }
+
+      const html = await res.text();
+      // Match canonical link
+      const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})">/);
+      if (canonicalMatch) {
+        const videoId = canonicalMatch[1];
+        console.log(`[YouTubeService] Auto-detected Live Video ID from canonical: ${videoId}`);
+        this.setVideoId(videoId);
+        return videoId;
+      }
+
+      // Match "videoId":"..."
+      const videoIdMatch = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+      if (videoIdMatch) {
+        const videoId = videoIdMatch[1];
+        console.log(`[YouTubeService] Auto-detected Live Video ID from JSON: ${videoId}`);
+        this.setVideoId(videoId);
+        return videoId;
+      }
+
+      console.log(`[YouTubeService] No active live broadcast found for ${handle}`);
+      return null;
+    } catch (err) {
+      console.warn(`[YouTubeService] Failed to auto-detect live for ${handle}:`, err.message);
+      return null;
+    }
+  }
+
   startPolling() {
     this.stop();
     if (!this.currentVideoId) return;

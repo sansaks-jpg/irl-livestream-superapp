@@ -5,33 +5,28 @@ import { useAudioProcessor } from '../hooks/useAudioProcessor';
 import { AudioMixer } from '../components/AudioMixer';
 import { YouTubeLivePanel } from '../components/YouTubeLivePanel';
 import { StreamControls } from '../components/StreamControls';
-import { PrivacyOverlay, PrivacyScreen } from '../components/PrivacyOverlay';
-import { Soundboard } from '../components/Soundboard';
+import { PrivacyScreen } from '../components/PrivacyOverlay';
 import { SettingsModal } from '../components/SettingsModal';
 import { 
   Camera, 
   MessageSquare, 
   Sliders, 
   Radio, 
-  Flame, 
   Settings, 
   FlipHorizontal, 
   Zap, 
   ZapOff, 
   Volume2, 
   VolumeX, 
-  Smartphone, 
-  Users, 
-  Clock, 
-  ShieldAlert,
-  Maximize2,
-  QrCode
+  Users,
+  EyeOff
 } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 export function Dashboard() {
   const { socket, isConnected } = useSocket();
 
-  // Navigation Tab: 'preview' | 'comments' | 'volume' | 'broadcast'
+  // Tab navigation: 'preview' | 'comments' | 'volume' | 'broadcast'
   const [activeTab, setActiveTab] = useState('preview');
 
   // Stream state
@@ -40,17 +35,18 @@ export function Dashboard() {
   const [streamStats, setStreamStats] = useState({ fps: 0, bitrate: '0 kbps', uptimeSeconds: 0, frame: 0 });
   const [isLoadingStream, setIsLoadingStream] = useState(false);
 
-  // YouTube live stats for top bar
+  // YouTube live stats & video ID
   const [ytStats, setYtStats] = useState({ viewerCount: 0, likes: 0 });
+  const [activeVideoId, setActiveVideoId] = useState('');
 
-  // Camera Source: 'local' (Kamera HP ini) or 'remote' (Kamera HP kedua nirkabel)
+  // Camera source: 'local' (kamera HP ini) or 'remote' (HP kedua)
   const [cameraSource, setCameraSource] = useState('local');
   const [localStream, setLocalStream] = useState(null);
-  const [facingMode, setFacingMode] = useState('environment'); // 'environment' (belakang) or 'user' (depan)
+  const [facingMode, setFacingMode] = useState('environment'); // 'environment' or 'user'
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
 
-  // Emergency / Privacy State
+  // Standby / Jeda layar
   const [isPrivacyActive, setIsPrivacyActive] = useState(false);
 
   // Config & Modals
@@ -58,7 +54,7 @@ export function Dashboard() {
   const [networkInfo, setNetworkInfo] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Video Refs
+  // Video & Recorder Refs
   const previewVideoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
 
@@ -69,10 +65,9 @@ export function Dashboard() {
     room: 'stream-room'
   });
 
-  // Determine active raw stream
   const activeStream = cameraSource === 'remote' ? remoteStream : localStream;
 
-  // Audio Processor Web Audio hook
+  // Web Audio hook
   const {
     gain,
     setGain,
@@ -85,7 +80,6 @@ export function Dashboard() {
     getProcessedStream
   } = useAudioProcessor(activeStream);
 
-  // Format seconds to HH:MM:SS
   const formatUptime = (seconds = 0) => {
     const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
     const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
@@ -93,7 +87,7 @@ export function Dashboard() {
     return `${h}:${m}:${s}`;
   };
 
-  // Initialize Native / Local Camera
+  // Init local camera
   const initLocalCamera = async (facing) => {
     if (localStream) {
       localStream.getTracks().forEach(t => t.stop());
@@ -120,7 +114,7 @@ export function Dashboard() {
         setHasTorch(!!capabilities.torch);
       }
     } catch (err) {
-      console.warn('Gagal akses kamera lokal:', err.message);
+      console.warn('Gagal akses kamera:', err.message);
     }
   };
 
@@ -135,22 +129,18 @@ export function Dashboard() {
     };
   }, [cameraSource, facingMode]);
 
-  // Flip Camera
   const toggleCameraFacing = () => {
     setTorchOn(false);
     setFacingMode(prev => (prev === 'environment' ? 'user' : 'environment'));
   };
 
-  // Toggle Torch
   const toggleTorch = async () => {
     if (!localStream) return;
     const videoTrack = localStream.getVideoTracks()[0];
     if (videoTrack && hasTorch) {
       try {
         const next = !torchOn;
-        await videoTrack.applyConstraints({
-          advanced: [{ torch: next }]
-        });
+        await videoTrack.applyConstraints({ advanced: [{ torch: next }] });
         setTorchOn(next);
       } catch (err) {
         console.warn('Torch error:', err);
@@ -158,20 +148,32 @@ export function Dashboard() {
     }
   };
 
-  // Fetch initial config & network info
+  // Fetch initial config & check live comments
   useEffect(() => {
-    fetch('/api/config')
-      .then(res => res.json())
-      .then(data => data.success && setConfig(data.config))
-      .catch(err => console.error('Failed to fetch config:', err));
+    apiFetch('/api/config')
+      .then(data => {
+        if (data.success) {
+          setConfig(data.config);
+          if (data.config.youtubeVideoId) {
+            setActiveVideoId(data.config.youtubeVideoId);
+          }
+          // Auto-detect live stream if channel handle exists
+          if (data.config.youtubeChannel) {
+            apiFetch(`/api/youtube/auto-detect?channel=${encodeURIComponent(data.config.youtubeChannel)}`)
+              .then(res => {
+                if (res.videoId) setActiveVideoId(res.videoId);
+              })
+              .catch(() => {});
+          }
+        }
+      })
+      .catch(err => console.warn('Config fetch notice:', err.message));
 
-    fetch('/api/network-info')
-      .then(res => res.json())
+    apiFetch('/api/network-info')
       .then(data => data.success && setNetworkInfo(data))
-      .catch(err => console.error('Failed to fetch network info:', err));
+      .catch(() => {});
 
-    fetch('/api/stream/status')
-      .then(res => res.json())
+    apiFetch('/api/stream/status')
       .then(data => {
         if (data.success) {
           setIsStreaming(data.isStreaming);
@@ -181,7 +183,7 @@ export function Dashboard() {
       .catch(() => {});
   }, []);
 
-  // Sync socket events
+  // Socket broadcast sync
   useEffect(() => {
     if (!socket) return;
 
@@ -196,6 +198,7 @@ export function Dashboard() {
 
     const handleYtStats = (stats) => {
       setYtStats(prev => ({ ...prev, ...stats }));
+      if (stats.videoId) setActiveVideoId(stats.videoId);
     };
 
     socket.on('stream-status', handleStreamStatus);
@@ -209,7 +212,7 @@ export function Dashboard() {
     };
   }, [socket]);
 
-  // Sync Video preview element
+  // Video preview element binding
   useEffect(() => {
     if (previewVideoRef.current) {
       if (activeStream) {
@@ -221,7 +224,6 @@ export function Dashboard() {
     }
   }, [activeStream]);
 
-  // Toggle Privacy Shield
   const handleTogglePrivacy = () => {
     setIsPrivacyActive(prev => {
       const next = !prev;
@@ -231,19 +233,15 @@ export function Dashboard() {
     });
   };
 
-  // Start Livestream
+  // Start Live Stream via safe apiFetch
   const handleStartStream = async () => {
     setIsLoadingStream(true);
     try {
-      const res = await fetch('/api/stream/start', {
+      const data = await apiFetch('/api/stream/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Gagal memulai stream');
-      }
 
       setIsStreaming(true);
       setIsMock(!!data.isMock);
@@ -270,13 +268,13 @@ export function Dashboard() {
         mediaRecorderRef.current = recorder;
       }
     } catch (err) {
-      alert('Error: ' + err.message);
+      alert(err.message);
     } finally {
       setIsLoadingStream(false);
     }
   };
 
-  // End Livestream
+  // Stop Live Stream
   const handleStopStream = async () => {
     setIsLoadingStream(true);
     try {
@@ -284,10 +282,10 @@ export function Dashboard() {
         mediaRecorderRef.current.stop();
         mediaRecorderRef.current = null;
       }
-      await fetch('/api/stream/stop', { method: 'POST' });
+      await apiFetch('/api/stream/stop', { method: 'POST' });
       setIsStreaming(false);
     } catch (err) {
-      console.error('Error stopping stream:', err);
+      console.error('Stop stream error:', err);
     } finally {
       setIsLoadingStream(false);
     }
@@ -295,76 +293,81 @@ export function Dashboard() {
 
   const handleSaveConfig = async (newConfig) => {
     try {
-      const res = await fetch('/api/config', {
+      const data = await apiFetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newConfig)
       });
-      const data = await res.json();
-      if (data.success) setConfig(data.config);
+      if (data.success) {
+        setConfig(data.config);
+        if (newConfig.youtubeChannel) {
+          apiFetch(`/api/youtube/auto-detect?channel=${encodeURIComponent(newConfig.youtubeChannel)}`)
+            .then(res => {
+              if (res.videoId) setActiveVideoId(res.videoId);
+            })
+            .catch(() => {});
+        }
+      }
     } catch (err) {
-      console.error('Failed to save config:', err);
+      console.error('Save config error:', err);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white">
-      {/* Top Mobile Status Header (Persistent) */}
-      <header className="h-14 border-b border-slate-800/80 bg-slate-900/95 backdrop-blur-md px-3 sm:px-5 flex items-center justify-between sticky top-0 z-40">
-        <div className="flex items-center gap-2">
-          {/* Live Status Pill */}
-          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold font-mono tracking-wide ${
-            isStreaming
-              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50'
-              : 'bg-slate-800 text-slate-400 border border-slate-700'
-          }`}>
-            <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-rose-500 animate-ping' : 'bg-slate-500'}`} />
-            <span>{isStreaming ? `LIVE ${formatUptime(streamStats.uptimeSeconds)}` : 'OFFLINE'}</span>
+    <div className="min-h-screen bg-[#050505] text-[#f1f1f1] flex flex-col justify-between font-sans select-none">
+      {/* Top Header Bar */}
+      <header className="h-12 border-b border-[#1f1f1f] bg-[#0a0a0a] px-4 flex items-center justify-between sticky top-0 z-40">
+        <div className="flex items-center gap-3">
+          {/* Status Indicator */}
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-[#ef4444] animate-ping' : 'bg-[#555555]'}`} />
+            <span className="text-xs font-bold font-mono tracking-wider">
+              {isStreaming ? `LIVE ${formatUptime(streamStats.uptimeSeconds)}` : 'STANDBY'}
+            </span>
           </div>
 
-          {/* Viewers Count */}
-          <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-[11px] font-mono text-slate-300">
-            <Users className="w-3 h-3 text-rose-400" />
+          {/* Viewers Badge */}
+          <div className="flex items-center gap-1.5 text-[11px] font-mono text-[#aaaaaa]">
+            <Users className="w-3.5 h-3.5" />
             <span>{ytStats.viewerCount.toLocaleString()}</span>
           </div>
         </div>
 
-        {/* Top Right Actions */}
+        {/* Right Actions */}
         <div className="flex items-center gap-2">
-          {/* Privacy Shield Quick Button */}
+          {/* Standby Screen Toggle */}
           <button
             type="button"
             onClick={handleTogglePrivacy}
-            className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1 transition ${
+            className={`p-1.5 rounded-lg text-xs transition border ${
               isPrivacyActive
-                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-900/40 animate-pulse'
-                : 'bg-slate-800 text-slate-300 hover:text-white'
+                ? 'bg-[#eab308]/20 text-[#eab308] border-[#eab308]/40'
+                : 'text-[#aaaaaa] hover:text-[#f1f1f1] border-transparent'
             }`}
-            title="Privacy Shield / BRB Screen"
+            title="Jeda Layar"
           >
-            <ShieldAlert className="w-4 h-4" />
-            <span className="hidden sm:inline">{isPrivacyActive ? 'BRB AKTIF' : 'BRB'}</span>
+            <EyeOff className="w-4 h-4" />
           </button>
 
-          {/* Settings Button */}
+          {/* Settings */}
           <button
             type="button"
             onClick={() => setIsSettingsOpen(true)}
-            className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition"
-            title="Pengaturan"
+            className="p-1.5 text-[#aaaaaa] hover:text-[#f1f1f1] rounded-lg transition"
+            title="Setelan"
           >
             <Settings className="w-4 h-4" />
           </button>
         </div>
       </header>
 
-      {/* Main Tab Content Area */}
-      <main className="flex-1 p-3 sm:p-5 max-w-4xl w-full mx-auto pb-24 overflow-y-auto">
-        {/* ================= TAB 1: PREVIEW KAMERA ================= */}
+      {/* Main Tab Content */}
+      <main className="flex-1 p-3 sm:p-4 max-w-2xl w-full mx-auto pb-20 overflow-y-auto">
+        {/* ================= TAB 1: KAMERA ================= */}
         {activeTab === 'preview' && (
-          <div className="flex flex-col gap-4 animate-in fade-in duration-150">
-            {/* Camera Video Viewport */}
-            <div className="relative w-full aspect-[4/3] sm:aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center">
+          <div className="flex flex-col gap-3">
+            {/* Viewfinder Video Frame */}
+            <div className="relative w-full aspect-[4/3] sm:aspect-video bg-black rounded-xl overflow-hidden border border-[#1f1f1f] flex items-center justify-center">
               <video
                 ref={previewVideoRef}
                 autoPlay
@@ -373,39 +376,37 @@ export function Dashboard() {
                 className={`w-full h-full object-cover ${cameraSource === 'local' && facingMode === 'user' ? '-scale-x-100' : ''}`}
               />
 
-              {/* Privacy Screen Overlay */}
               {isPrivacyActive && (
-                <PrivacyScreen privacyText={config?.privacyText} />
+                <PrivacyScreen privacyText={config?.privacyText || 'STANDBY'} />
               )}
 
-              {/* Top Video HUD */}
-              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between z-20 pointer-events-none">
-                <span className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-[11px] font-mono text-slate-200 flex items-center gap-1.5">
-                  <Camera className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>{cameraSource === 'local' ? (facingMode === 'environment' ? 'Cam Belakang' : 'Cam Depan') : 'HP Kedua (WebRTC)'}</span>
+              {/* Viewfinder Top HUD */}
+              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-20">
+                <span className="px-2 py-0.5 rounded bg-black/70 text-[10px] font-mono text-[#aaaaaa] border border-[#333333]">
+                  {cameraSource === 'local' ? (facingMode === 'environment' ? 'Belakang' : 'Depan') : 'HP Kedua'}
                 </span>
 
-                {/* Mini VU bar on camera */}
-                <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10">
-                  {isMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
-                  <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                {/* Mini Audio VU */}
+                <div className="flex items-center gap-1.5 bg-black/70 px-2 py-0.5 rounded border border-[#333333]">
+                  {isMuted ? <VolumeX className="w-3 h-3 text-[#ef4444]" /> : <Volume2 className="w-3 h-3 text-[#22c55e]" />}
+                  <div className="w-10 h-1.5 bg-[#222222] rounded-full overflow-hidden">
                     <div
-                      className={`h-full ${isMuted ? 'bg-rose-500' : 'bg-emerald-400'}`}
+                      className={`h-full ${isMuted ? 'bg-[#ef4444]' : 'bg-[#22c55e]'}`}
                       style={{ width: `${isMuted ? 100 : vuLevel}%` }}
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Floating Camera Controls on Video */}
-              <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-20">
-                {/* Source Switcher */}
-                <div className="flex items-center gap-1 bg-black/70 backdrop-blur-md p-1 rounded-xl border border-white/10 text-xs">
+              {/* Viewfinder Bottom Controls */}
+              <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between z-20">
+                {/* Source Toggle */}
+                <div className="flex items-center gap-1 bg-black/80 p-0.5 rounded-lg border border-[#333333] text-[11px]">
                   <button
                     type="button"
                     onClick={() => setCameraSource('local')}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition ${
-                      cameraSource === 'local' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                    className={`px-2 py-0.5 rounded font-medium transition ${
+                      cameraSource === 'local' ? 'bg-[#333333] text-white' : 'text-[#717171] hover:text-white'
                     }`}
                   >
                     HP Ini
@@ -413,88 +414,90 @@ export function Dashboard() {
                   <button
                     type="button"
                     onClick={() => setCameraSource('remote')}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition ${
-                      cameraSource === 'remote' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                    className={`px-2 py-0.5 rounded font-medium transition ${
+                      cameraSource === 'remote' ? 'bg-[#333333] text-white' : 'text-[#717171] hover:text-white'
                     }`}
                   >
                     HP Kedua
                   </button>
                 </div>
 
-                {/* Hardware controls for local cam */}
+                {/* Local Hardware Controls */}
                 {cameraSource === 'local' && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     {hasTorch && (
                       <button
                         type="button"
                         onClick={toggleTorch}
-                        className={`p-2.5 rounded-xl backdrop-blur-md border transition ${
+                        className={`p-2 rounded-lg border transition ${
                           torchOn
-                            ? 'bg-amber-500 text-slate-950 border-amber-400'
-                            : 'bg-black/70 text-slate-300 border-white/10'
+                            ? 'bg-[#eab308] text-black border-[#eab308]'
+                            : 'bg-black/80 text-[#aaaaaa] border-[#333333]'
                         }`}
-                        title="Senter"
+                        title="Flash"
                       >
-                        {torchOn ? <Zap className="w-4 h-4" /> : <ZapOff className="w-4 h-4" />}
+                        {torchOn ? <Zap className="w-3.5 h-3.5" /> : <ZapOff className="w-3.5 h-3.5" />}
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={toggleCameraFacing}
-                      className="p-2.5 rounded-xl bg-black/70 backdrop-blur-md text-slate-300 hover:text-white border border-white/10 active:scale-95 transition"
-                      title="Flip Kamera"
+                      className="p-2 rounded-lg bg-black/80 text-[#aaaaaa] hover:text-white border border-[#333333] active:scale-95 transition"
+                      title="Balik Kamera"
                     >
-                      <FlipHorizontal className="w-4 h-4" />
+                      <FlipHorizontal className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Quick Actions Bar */}
+            {/* Quick Action Buttons */}
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={handleTogglePrivacy}
-                className={`py-2.5 px-3 rounded-xl font-bold text-xs uppercase flex items-center justify-center gap-1.5 transition ${
+                className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition border ${
                   isPrivacyActive
-                    ? 'bg-amber-500 text-slate-950'
-                    : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
+                    ? 'bg-[#eab308]/20 text-[#eab308] border-[#eab308]/40'
+                    : 'bg-[#121212] border-[#222222] text-[#aaaaaa] hover:text-white'
                 }`}
               >
-                <ShieldAlert className="w-4 h-4 text-amber-400" />
-                <span>{isPrivacyActive ? 'Matikan BRB' : 'Layar BRB / Privasi'}</span>
+                <EyeOff className="w-3.5 h-3.5" />
+                <span>{isPrivacyActive ? 'Layar Dijeda' : 'Jeda Layar'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={toggleMute}
-                className={`py-2.5 px-3 rounded-xl font-bold text-xs uppercase flex items-center justify-center gap-1.5 transition ${
+                className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition border ${
                   isMuted
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50'
-                    : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
+                    ? 'bg-[#ef4444]/20 text-[#ef4444] border-[#ef4444]/40'
+                    : 'bg-[#121212] border-[#222222] text-[#aaaaaa] hover:text-white'
                 }`}
               >
-                {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
-                <span>{isMuted ? 'Unmute Mic' : 'Mute Mic'}</span>
+                {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                <span>{isMuted ? 'Mic Muted' : 'Mute Mic'}</span>
               </button>
             </div>
-
-            {/* Soundboard Bar */}
-            <Soundboard />
           </div>
         )}
 
-        {/* ================= TAB 2: KOMEN / CHAT YOUTUBE ================= */}
+        {/* ================= TAB 2: CHAT YOUTUBE (100% CLEAN) ================= */}
         {activeTab === 'comments' && (
-          <div className="animate-in fade-in duration-150">
-            <YouTubeLivePanel socket={socket} initialStats={ytStats} />
+          <div className="h-full">
+            <YouTubeLivePanel
+              socket={socket}
+              videoId={activeVideoId}
+              channelHandle={config?.youtubeChannel}
+              initialStats={ytStats}
+            />
           </div>
         )}
 
-        {/* ================= TAB 3: VOLUME / AUDIO MIXER ================= */}
+        {/* ================= TAB 3: AUDIO MIXER ================= */}
         {activeTab === 'volume' && (
-          <div className="space-y-4 animate-in fade-in duration-150">
+          <div>
             <AudioMixer
               gain={gain}
               setGain={setGain}
@@ -504,15 +507,14 @@ export function Dashboard() {
               toggleLimiter={toggleLimiter}
               vuLevel={vuLevel}
               isClipping={isClipping}
-              inputLabel={cameraSource === 'local' ? 'Kamera HP Ini' : 'HP Kamera Kedua'}
+              inputLabel={cameraSource === 'local' ? 'Mikrofon HP' : 'HP Kedua'}
             />
-            <Soundboard />
           </div>
         )}
 
-        {/* ================= TAB 4: BROADCAST & KONTROL ================= */}
+        {/* ================= TAB 4: SIARAN ================= */}
         {activeTab === 'broadcast' && (
-          <div className="space-y-4 animate-in fade-in duration-150">
+          <div className="space-y-3">
             <StreamControls
               isStreaming={isStreaming}
               isMock={isMock}
@@ -522,90 +524,77 @@ export function Dashboard() {
               isLoading={isLoadingStream}
             />
 
-            {/* Quick Settings Card */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">
-                  Konfigurasi Siaran YouTube
-                </span>
+            <div className="bg-[#0f0f0f] border border-[#222222] rounded-xl p-4 space-y-2 text-xs">
+              <div className="flex items-center justify-between text-[#aaaaaa]">
+                <span className="font-semibold uppercase tracking-wider">Info Siaran</span>
                 <button
                   type="button"
                   onClick={() => setIsSettingsOpen(true)}
-                  className="text-xs text-indigo-400 hover:underline flex items-center gap-1"
+                  className="text-[#f1f1f1] hover:underline"
                 >
-                  <Settings className="w-3 h-3" />
-                  <span>Pengaturan Lengkap</span>
+                  Ubah Setelan
                 </button>
               </div>
-
-              <div className="text-xs text-slate-400 space-y-1">
-                <p>• <strong>Target:</strong> {config?.rtmpUrl || 'rtmp://a.rtmp.youtube.com/live2'}</p>
-                <p>• <strong>Stream Key:</strong> {config?.streamKeyMasked || '(Belum diisi / Mode Test)'}</p>
-                <p>• <strong>Resolusi:</strong> {config?.resolution || '720p'} @ {config?.fps || 30} FPS</p>
+              <div className="font-mono text-[11px] text-[#717171] space-y-1">
+                <div>Channel: {config?.youtubeChannel || '(Belum diset)'}</div>
+                <div>Target: {config?.rtmpUrl || 'rtmp://a.rtmp.youtube.com/live2'}</div>
+                <div>Resolusi: {config?.resolution || '720p'} @ {config?.fps || 30} FPS</div>
               </div>
             </div>
           </div>
         )}
       </main>
 
-      {/* ================= FIXED BOTTOM TAB NAVIGATION BAR ================= */}
-      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-slate-900/95 backdrop-blur-xl border-t border-slate-800 z-50 px-2 sm:px-6 flex items-center justify-around">
-        {/* Tab 1: Preview */}
+      {/* ================= BOTTOM TAB NAVIGATION ================= */}
+      <nav className="fixed bottom-0 left-0 right-0 h-14 bg-[#0a0a0a] border-t border-[#1f1f1f] z-50 px-4 flex items-center justify-around">
+        {/* Tab 1: Kamera */}
         <button
           type="button"
           onClick={() => setActiveTab('preview')}
-          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition ${
-            activeTab === 'preview'
-              ? 'text-indigo-400 font-bold'
-              : 'text-slate-400 hover:text-slate-200'
+          className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+            activeTab === 'preview' ? 'text-white' : 'text-[#717171] hover:text-[#aaaaaa]'
           }`}
         >
-          <Camera className={`w-5 h-5 transition-transform ${activeTab === 'preview' ? 'scale-110 text-indigo-400' : ''}`} />
-          <span className="text-[10px] mt-0.5">Preview</span>
+          <Camera className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">Kamera</span>
         </button>
 
-        {/* Tab 2: Komen */}
+        {/* Tab 2: Chat */}
         <button
           type="button"
           onClick={() => setActiveTab('comments')}
-          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl relative transition ${
-            activeTab === 'comments'
-              ? 'text-rose-400 font-bold'
-              : 'text-slate-400 hover:text-slate-200'
+          className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+            activeTab === 'comments' ? 'text-white' : 'text-[#717171] hover:text-[#aaaaaa]'
           }`}
         >
-          <MessageSquare className={`w-5 h-5 transition-transform ${activeTab === 'comments' ? 'scale-110 text-rose-400' : ''}`} />
-          <span className="text-[10px] mt-0.5">Komen</span>
+          <MessageSquare className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">Chat</span>
         </button>
 
-        {/* Tab 3: Volume */}
+        {/* Tab 3: Audio */}
         <button
           type="button"
           onClick={() => setActiveTab('volume')}
-          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition ${
-            activeTab === 'volume'
-              ? 'text-emerald-400 font-bold'
-              : 'text-slate-400 hover:text-slate-200'
+          className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+            activeTab === 'volume' ? 'text-white' : 'text-[#717171] hover:text-[#aaaaaa]'
           }`}
         >
-          <Sliders className={`w-5 h-5 transition-transform ${activeTab === 'volume' ? 'scale-110 text-emerald-400' : ''}`} />
-          <span className="text-[10px] mt-0.5">Volume</span>
+          <Sliders className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">Audio</span>
         </button>
 
-        {/* Tab 4: Broadcast */}
+        {/* Tab 4: Siaran */}
         <button
           type="button"
           onClick={() => setActiveTab('broadcast')}
-          className={`flex flex-col items-center justify-center flex-1 py-1 rounded-xl relative transition ${
-            activeTab === 'broadcast'
-              ? 'text-amber-400 font-bold'
-              : 'text-slate-400 hover:text-slate-200'
+          className={`flex flex-col items-center justify-center flex-1 py-1 relative transition ${
+            activeTab === 'broadcast' ? 'text-white' : 'text-[#717171] hover:text-[#aaaaaa]'
           }`}
         >
-          <Radio className={`w-5 h-5 transition-transform ${activeTab === 'broadcast' ? 'scale-110 text-amber-400' : ''}`} />
-          <span className="text-[10px] mt-0.5">Broadcast</span>
+          <Radio className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">Siaran</span>
           {isStreaming && (
-            <span className="absolute top-2 right-6 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+            <span className="absolute top-1 right-5 w-2 h-2 rounded-full bg-[#ef4444] animate-ping" />
           )}
         </button>
       </nav>

@@ -121,6 +121,20 @@ app.post('/api/stream/stop', (req, res) => {
   }
 });
 
+app.get('/api/youtube/auto-detect', async (req, res) => {
+  const channel = req.query.channel || configManager.get('youtubeChannel');
+  if (!channel) {
+    return res.status(400).json({ success: false, error: 'Channel handle tidak disertakan' });
+  }
+  const videoId = await youtubeService.detectLiveFromHandle(channel);
+  if (videoId) {
+    configManager.save({ youtubeVideoId: videoId });
+    io.emit('yt-stats', { videoId, isLive: true });
+    return res.json({ success: true, videoId, isLive: true });
+  }
+  res.json({ success: true, videoId: null, isLive: false, message: 'Belum ada live stream aktif di channel ini' });
+});
+
 app.post('/api/youtube/set-video', (req, res) => {
   const { videoId } = req.body;
   youtubeService.setVideoId(videoId);
