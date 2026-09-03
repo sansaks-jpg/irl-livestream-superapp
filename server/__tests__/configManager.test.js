@@ -40,11 +40,22 @@ describe('ConfigManager', () => {
     expect(reloaded.get('fps')).toBe(60);
   });
 
-  it('should return sanitized config with masked stream key', () => {
+  it('should return sanitized config without raw secrets', () => {
     const manager = new ConfigManager(TEST_CONFIG_PATH);
-    manager.save({ streamKey: 'abcd1234efgh5678' });
+    manager.save({ streamKey: 'abcd1234efgh5678', obsPassword: 's3cret' });
     const sanitized = manager.getSanitized();
-    expect(sanitized.streamKey).toBe('abcd1234efgh5678');
+    expect(sanitized.streamKey).toBeUndefined();
+    expect(sanitized.obsPassword).toBeUndefined();
     expect(sanitized.streamKeyMasked).toBe('abcd...5678');
+    // Raw values remain readable internally
+    expect(manager.get('streamKey')).toBe('abcd1234efgh5678');
+  });
+
+  it('should drop unknown/derived keys on save', () => {
+    const manager = new ConfigManager(TEST_CONFIG_PATH);
+    manager.save({ fps: 60, streamKeyMasked: 'abcd...5678', evilKey: 1 });
+    expect(manager.get('fps')).toBe(60);
+    expect(manager.get('streamKeyMasked')).toBeUndefined();
+    expect(manager.get('evilKey')).toBeUndefined();
   });
 });

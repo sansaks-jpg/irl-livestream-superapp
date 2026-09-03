@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const EventEmitter = require('events');
 
 class StreamManager extends EventEmitter {
@@ -17,6 +17,7 @@ class StreamManager extends EventEmitter {
     };
     this.uptimeInterval = null;
     this.recentLogs = [];
+    this._expectClose = false;
   }
 
   startStream(customOptions = {}) {
@@ -28,13 +29,30 @@ class StreamManager extends EventEmitter {
     const { rtmpUrl, streamKey, fps, videoBitrate, audioBitrate } = config;
 
     let targetUrl;
-    const isMock = !streamKey || streamKey.trim() === '' || streamKey.toLowerCase() === 'test';
+    const isMock = !streamKey || String(streamKey).trim() === '' || String(streamKey).trim().toLowerCase() === 'test';
 
     if (isMock) {
       console.log('[StreamManager] Starting in TEST/MOCK mode (output to null)...');
     } else {
-      targetUrl = `${rtmpUrl.replace(/\/$/, '')}/${streamKey.trim()}`;
-      console.log(`[StreamManager] Starting live stream to: ${rtmpUrl}/****`);
+      const safeRtmp = (rtmpUrl || '').replace(/\/$/, '');
+      if (!safeRtmp) {
+        throw new Error('RTMP URL belum dikonfigurasi');
+      }
+      targetUrl = `${safeRtmp}/${String(streamKey).trim()}`;
+      console.log(`[StreamManager] Starting live stream to: ${safeRtmp}/****`);
+    }
+
+    // Fail fast with a clear error instead of reporting success and dying async.
+    try {
+      const probe = spawnSync('ffmpeg', ['-version'], { windowsHide: true, timeout: 10000 });
+      if (probe.error) {
+        throw probe.error;
+      }
+      if (typeof probe.status === 'number' && probe.status !== 0) {
+        throw new Error(`ffmpeg -version exited with code ${probe.status}`);
+      }
+    } catch (err) {
+      throw new Error(`FFmpeg tidak tersedia: ${err.message}`);
     }
 
     // FFmpeg args optimized for live WebM pipe -> YouTube RTMP
@@ -125,8 +143,13 @@ class StreamManager extends EventEmitter {
         if (code !== 0 && code !== null) {
           console.error('[StreamManager] Last FFmpeg logs:\n', this.recentLogs.slice(-5).join(''));
         }
+        const expected = this._expectClose;
+        this._expectClose = false;
         this.cleanup();
-        this.emit('stopped', { code });
+        // stopStream() already emitted 'stopped' — don't double-emit.
+        if (!expected) {
+          this.emit('stopped', { code });
+        }
       });
 
       return { success: true, isMock };
@@ -154,19 +177,29 @@ class StreamManager extends EventEmitter {
       return false;
     }
     console.log('[StreamManager] Stopping stream gracefully...');
-    if (this.ffmpegProcess) {
+    // Capture the process: cleanup() below nulls this.ffmpegProcess,
+    // so the fallback kill timer must reference the local handle.
+    const proc = this.ffmpegProcess;
+    if (proc) {
       try {
-        if (this.ffmpegProcess.stdin && this.ffmpegProcess.stdin.writable) {
-          this.ffmpegProcess.stdin.end();
+        if (proc.stdin && proc.stdin.writable) {
+          proc.stdin.end();
         }
+        this._expectClose = true;
         setTimeout(() => {
-          if (this.ffmpegProcess) {
-            this.ffmpegProcess.kill('SIGTERM');
+          try {
+            if (proc.exitCode === null && proc.signalCode === null) {
+              proc.kill('SIGTERM');
+            }
+          } catch (err) {
+            // Already exited — nothing to do.
           }
         }, 1500);
       } catch (err) {
-        if (this.ffmpegProcess) {
-          this.ffmpegProcess.kill('SIGKILL');
+        try {
+          proc.kill('SIGKILL');
+        } catch (e) {
+          // ignore
         }
       }
     }

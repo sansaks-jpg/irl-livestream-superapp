@@ -1,15 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { 
-  X, 
-  Settings, 
-  Radio, 
-  Smartphone, 
-  Copy, 
-  Check, 
-  Eye, 
-  EyeOff, 
-  Save,
+import {
+  X,
+  Radio,
+  Copy,
+  Check,
+  Eye,
+  EyeOff,
   Search,
   Server
 } from 'lucide-react';
@@ -52,7 +49,8 @@ export function SettingsModal({
   const camUrl = networkInfo?.camUrlDev || (typeof window !== 'undefined' ? `${window.location.origin}/cam` : '');
 
   const handleCopyCamUrl = () => {
-    navigator.clipboard.writeText(camUrl);
+    if (!camUrl) return;
+    navigator.clipboard.writeText(camUrl).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -82,7 +80,14 @@ export function SettingsModal({
   const handleSubmit = (e) => {
     e.preventDefault();
     setServerUrl(backendUrl);
-    onSaveConfig(formData);
+    const payload = { ...formData };
+    // Empty key field means "keep the stored key" (GET no longer returns it).
+    // Type "test" for offline mock mode.
+    if (!payload.streamKey || !payload.streamKey.trim()) {
+      delete payload.streamKey;
+    }
+    delete payload.streamKeyMasked;
+    onSaveConfig(payload);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -126,6 +131,40 @@ export function SettingsModal({
             />
             <span className="text-[10px] text-[#717171] block">
               Alamat IP komputer laptop Anda yang menjalankan server `npm start`.
+            </span>
+          </div>
+
+          {/* Phone Camera Pairing (QR) */}
+          <div className="space-y-2 pb-3 border-b border-[#222222]">
+            <label className="text-[#aaaaaa] font-medium block">
+              Kamera HP Kedua (Scan QR)
+            </label>
+            {camUrl ? (
+              <div className="flex items-center gap-3">
+                <div className="bg-white p-2 rounded-lg shrink-0">
+                  <QRCodeSVG value={camUrl} size={96} />
+                </div>
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <p className="text-[10px] text-[#717171] font-mono break-all">
+                    {camUrl}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCopyCamUrl}
+                    className="px-3 py-1.5 bg-[#222222] hover:bg-[#333333] text-[#f1f1f1] rounded-lg font-medium flex items-center gap-1.5 transition"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-[#22c55e]" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copied ? 'Disalin!' : 'Salin Tautan'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <span className="text-[10px] text-[#717171] block">
+                Info jaringan belum tersedia. Pastikan backend aktif.
+              </span>
+            )}
+            <span className="text-[10px] text-[#717171] block">
+              HP dan laptop harus di Wi-Fi/hotspot yang sama. Buka di Chrome/Safari, tanpa install aplikasi.
             </span>
           </div>
 
@@ -175,7 +214,7 @@ export function SettingsModal({
                 type={showKey ? 'text' : 'password'}
                 value={formData.streamKey}
                 onChange={(e) => setFormData(p => ({ ...p, streamKey: e.target.value }))}
-                placeholder="xxxx-xxxx-xxxx-xxxx-xxxx"
+                placeholder={config?.streamKeyMasked ? `Tersimpan: ${config.streamKeyMasked} (kosongkan = tetap)` : 'xxxx-xxxx-xxxx-xxxx-xxxx'}
                 className="w-full bg-[#050505] border border-[#272727] rounded-lg px-3 py-2 pr-9 text-[#f1f1f1] font-mono focus:outline-none focus:border-[#cc0000]"
               />
               <button
@@ -187,7 +226,7 @@ export function SettingsModal({
               </button>
             </div>
             <span className="text-[10px] text-[#717171] block">
-              Kosongkan atau isi "test" untuk uji coba lokal tanpa siaran sungguhan.
+              Kosongkan untuk mempertahankan kunci tersimpan, atau isi "test" untuk uji coba lokal tanpa siaran sungguhan.
             </span>
           </div>
 

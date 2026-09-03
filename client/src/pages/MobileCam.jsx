@@ -1,23 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useWebRTC } from '../hooks/useWebRTC';
-import { 
-  Camera, 
-  FlipHorizontal, 
-  Zap, 
-  ZapOff, 
-  Battery, 
-  Mic, 
-  MicOff, 
-  Wifi, 
-  WifiOff, 
-  Maximize, 
-  Sun,
+import {
+  FlipHorizontal,
+  Zap,
+  ZapOff,
+  Battery,
+  Mic,
+  MicOff,
+  Maximize,
   Radio
 } from 'lucide-react';
 
 export function MobileCam() {
-  const { socket, isConnected } = useSocket();
+  const { socket } = useSocket();
   const [facingMode, setFacingMode] = useState('environment'); // 'environment' (belakang) or 'user' (depan)
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
@@ -29,6 +25,9 @@ export function MobileCam() {
 
   const videoRef = useRef(null);
   const wakeLockRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const audioRafRef = useRef(null);
 
   // WebRTC hook as cam-sender
   const { connectionState } = useWebRTC({
@@ -61,21 +60,45 @@ export function MobileCam() {
 
   // Monitor Battery API
   useEffect(() => {
+    let battery = null;
+    let updateBattery = null;
+    let cancelled = false;
     if ('getBattery' in navigator) {
-      navigator.getBattery().then((battery) => {
-        const updateBattery = () => {
+      navigator.getBattery().then((b) => {
+        if (cancelled) return;
+        battery = b;
+        updateBattery = () => {
           setBatteryLevel(Math.round(battery.level * 100));
         };
         updateBattery();
         battery.addEventListener('levelchange', updateBattery);
       }).catch(() => {});
     }
+    return () => {
+      cancelled = true;
+      if (battery && updateBattery) {
+        battery.removeEventListener('levelchange', updateBattery);
+      }
+    };
+  }, []);
+
+  const stopAudioMonitor = useCallback(() => {
+    if (audioRafRef.current) {
+      cancelAnimationFrame(audioRafRef.current);
+      audioRafRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
   }, []);
 
   // Initialize Camera & Microphone Stream
-  const initCamera = async (facing) => {
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
+  const initCamera = useCallback(async (facing) => {
+    stopAudioMonitor();
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(t => t.stop());
+      localStreamRef.current = null;
     }
 
     try {
@@ -94,6 +117,7 @@ export function MobileCam() {
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
       setLocalStream(stream);
       setErrorMsg(null);
 
@@ -112,6 +136,7 @@ export function MobileCam() {
       try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         const ctx = new AudioCtx();
+        audioCtxRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 128;
@@ -125,7 +150,7 @@ export function MobileCam() {
           for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
           const avg = sum / dataArray.length;
           setAudioLevel(Math.min(100, Math.round((avg / 128) * 100)));
-          requestAnimationFrame(checkAudio);
+          audioRafRef.current = requestAnimationFrame(checkAudio);
         };
         checkAudio();
       } catch (e) {
@@ -136,16 +161,25 @@ export function MobileCam() {
       console.error('[MobileCam] getUserMedia error:', err);
       setErrorMsg(`Izin kamera/mic ditolak atau tidak didukung: ${err.message}`);
     }
-  };
+  }, [stopAudioMonitor]);
 
   useEffect(() => {
     initCamera(facingMode);
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
+      if (audioRafRef.current) {
+        cancelAnimationFrame(audioRafRef.current);
+        audioRafRef.current = null;
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => t.stop());
+        localStreamRef.current = null;
       }
     };
-  }, [facingMode]);
+  }, [facingMode, initCamera]);
 
   // Flip Camera
   const toggleCamera = () => {

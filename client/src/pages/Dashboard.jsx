@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useWebRTC } from '../hooks/useWebRTC';
 import { useAudioProcessor } from '../hooks/useAudioProcessor';
 import { AudioMixer } from '../components/AudioMixer';
+import { Soundboard } from '../components/Soundboard';
 import { MyinstantsSoundboard } from '../components/MyinstantsSoundboard';
 import { YouTubeLivePanel } from '../components/YouTubeLivePanel';
 import { StreamControls } from '../components/StreamControls';
@@ -27,9 +28,10 @@ import {
   Monitor
 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
+import { formatUptime } from '../utils/format';
 
 export function Dashboard() {
-  const { socket, isConnected } = useSocket();
+  const { socket } = useSocket();
 
   // Tab navigation: 'preview' | 'comments' | 'volume' | 'broadcast'
   const [activeTab, setActiveTab] = useState('preview');
@@ -69,9 +71,10 @@ export function Dashboard() {
   const previewVideoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const wakeLockRef = useRef(null);
+  const localStreamRef = useRef(null);
 
   // WebRTC hook for remote phone camera
-  const { remoteStream, connectionState } = useWebRTC({
+  const { remoteStream } = useWebRTC({
     socket,
     role: 'dashboard',
     room: 'stream-room'
@@ -94,17 +97,14 @@ export function Dashboard() {
     treble,
     updateTreble,
     playSoundToStream,
+    getAudioGraph,
     vuLevel,
     isClipping,
     getProcessedStream
   } = useAudioProcessor(activeStream);
 
-  const formatUptime = (seconds = 0) => {
-    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${h}:${m}:${s}`;
-  };
+  // Chat history lives here so switching tabs doesn't wipe the feed.
+  const [ytMessages, setYtMessages] = useState([]);
 
   // Keep screen awake while streaming to prevent network/webview sleep
   useEffect(() => {
@@ -127,10 +127,13 @@ export function Dashboard() {
     };
   }, [isStreaming]);
 
-  // Init local camera with orientation constraints
-  const initLocalCamera = async (facing, ratio) => {
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
+  // Init local camera with orientation constraints.
+  // Tracks are owned by localStreamRef (not state) so effect cleanups and
+  // rapid camera flips always stop the live tracks instead of a stale copy.
+  const initLocalCamera = useCallback(async (facing, ratio) => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(t => t.stop());
+      localStreamRef.current = null;
     }
     try {
       const isPortrait = ratio === 'portrait';
@@ -147,6 +150,7 @@ export function Dashboard() {
           autoGainControl: true
         }
       });
+      localStreamRef.current = stream;
       setLocalStream(stream);
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -157,18 +161,19 @@ export function Dashboard() {
     } catch (err) {
       console.warn('Gagal akses kamera:', err.message);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (cameraSource === 'local') {
       initLocalCamera(facingMode, aspectRatio);
     }
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => t.stop());
+        localStreamRef.current = null;
       }
     };
-  }, [cameraSource, facingMode, aspectRatio]);
+  }, [cameraSource, facingMode, aspectRatio, initLocalCamera]);
 
   const toggleCameraFacing = () => {
     setTorchOn(false);
@@ -193,21 +198,21 @@ export function Dashboard() {
     }
   };
 
-  // Turn off hardware camera sensor and microphone when privacy is activated
+  // Privacy shield: mute the ACTIVE source (local or remote HP), not just local.
+  // Disabling the tracks blanks the preview AND the recorded/broadcast frames,
+  // since MediaRecorder consumes these same track objects.
   const handleTogglePrivacy = () => {
-    setIsPrivacyActive(prev => {
-      const next = !prev;
-      // Disable physical camera track and audio track so camera sensor shuts down
-      if (localStream) {
-        localStream.getVideoTracks().forEach(track => {
-          track.enabled = !next;
-        });
-        localStream.getAudioTracks().forEach(track => {
-          track.enabled = !next;
-        });
-      }
-      return next;
-    });
+    const next = !isPrivacyActive;
+    const stream = cameraSource === 'remote' ? remoteStream : localStream;
+    if (stream) {
+      stream.getVideoTracks().forEach(track => {
+        track.enabled = !next;
+      });
+      stream.getAudioTracks().forEach(track => {
+        track.enabled = !next;
+      });
+    }
+    setIsPrivacyActive(next);
   };
 
   // Share Live Stream link
@@ -312,46 +317,64 @@ export function Dashboard() {
     }
   }, [activeStream]);
 
-  // Start Live Stream via safe apiFetch & ArrayBuffer chunk stream
+  // Start Live Stream via safe apiFetch & ArrayBuffer chunk stream.
+  // LIVE state is set only after MediaRecorder is actually running, so the UI
+  // can never show "live" while no chunks flow (no socket / no camera / bad mime).
   const handleStartStream = async () => {
     setIsLoadingStream(true);
+    let serverStarted = false;
     try {
       const data = await apiFetch('/api/stream/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
-
-      setIsStreaming(true);
+      serverStarted = true;
       setIsMock(!!data.isMock);
 
       const processed = getProcessedStream() || activeStream;
-      if (processed && socket) {
-        let mimeType = 'video/webm;codecs=vp8,opus';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'video/webm';
-        }
-
-        const recorder = new MediaRecorder(processed, {
-          mimeType,
-          videoBitsPerSecond: 3000000
-        });
-
-        recorder.ondataavailable = async (event) => {
-          if (event.data && event.data.size > 0 && socket.connected) {
-            try {
-              const arrayBuffer = await event.data.arrayBuffer();
-              socket.emit('stream-chunk', arrayBuffer);
-            } catch (e) {
-              // ignore
-            }
-          }
-        };
-
-        recorder.start(350);
-        mediaRecorderRef.current = recorder;
+      if (!processed) {
+        throw new Error('Kamera belum siap. Tunggu preview muncul lalu coba lagi.');
       }
+      if (!socket || !socket.connected) {
+        throw new Error('Socket belum terhubung ke server. Periksa koneksi lalu coba lagi.');
+      }
+
+      let mimeType = 'video/webm;codecs=vp8,opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
+      }
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        throw new Error('Browser tidak mendukung perekaman video/webm.');
+      }
+
+      const recorder = new MediaRecorder(processed, {
+        mimeType,
+        videoBitsPerSecond: 3000000
+      });
+
+      recorder.ondataavailable = async (event) => {
+        if (event.data && event.data.size > 0 && socket.connected) {
+          try {
+            const arrayBuffer = await event.data.arrayBuffer();
+            socket.emit('stream-chunk', arrayBuffer);
+          } catch (e) {
+            // ignore
+          }
+        }
+      };
+
+      recorder.start(350);
+      mediaRecorderRef.current = recorder;
+      setIsStreaming(true);
     } catch (err) {
+      if (serverStarted) {
+        try {
+          await apiFetch('/api/stream/stop', { method: 'POST' });
+        } catch (e) {
+          // ignore — server state will sync via socket events
+        }
+      }
       alert(err.message);
     } finally {
       setIsLoadingStream(false);
@@ -608,7 +631,8 @@ export function Dashboard() {
               socket={socket}
               videoId={activeVideoId}
               channelHandle={config?.youtubeChannel}
-              initialStats={ytStats}
+              messages={ytMessages}
+              onMessagesChange={setYtMessages}
             />
           </div>
         )}
@@ -636,6 +660,9 @@ export function Dashboard() {
 
             {/* Soundboard Myinstants */}
             <MyinstantsSoundboard onPlaySound={playSoundToStream} />
+
+            {/* Offline synth soundboard — routed into the live mix */}
+            <Soundboard getAudioGraph={getAudioGraph} />
           </div>
         )}
 

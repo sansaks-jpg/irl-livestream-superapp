@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Play, Square, Activity, Clock, Wifi, AlertTriangle } from 'lucide-react';
+import { Play, Square, AlertTriangle } from 'lucide-react';
+import { formatUptime } from '../utils/format';
 
 export function StreamControls({
   isStreaming = false,
@@ -11,17 +12,12 @@ export function StreamControls({
 }) {
   const [showConfirmStop, setShowConfirmStop] = useState(false);
 
-  const formatUptime = (seconds = 0) => {
-    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${h}:${m}:${s}`;
-  };
-
   const handleStopClick = () => {
     if (showConfirmStop) {
       setShowConfirmStop(false);
-      onStopStream && onStopStream();
+      if (onStopStream) {
+        onStopStream();
+      }
     } else {
       setShowConfirmStop(true);
       setTimeout(() => setShowConfirmStop(false), 5000);

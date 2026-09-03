@@ -1,10 +1,9 @@
 import React from 'react';
-import { EyeOff, Radio } from 'lucide-react';
+import { EyeOff } from 'lucide-react';
 
 export function PrivacyOverlay({
   isActive = false,
-  onToggle,
-  privacyText = 'STANDBY'
+  onToggle
 }) {
   return (
     <button

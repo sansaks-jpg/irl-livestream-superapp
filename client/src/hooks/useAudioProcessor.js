@@ -178,6 +178,10 @@ export function useAudioProcessor(inputStream) {
 
   // Handle Limiter toggle
   const toggleLimiter = useCallback(() => {
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+      setLimiterEnabled(prev => !prev);
+      return;
+    }
     setLimiterEnabled(prev => {
       const next = !prev;
       if (highFilterRef.current && analyserNodeRef.current && compressorNodeRef.current) {
@@ -198,15 +202,62 @@ export function useAudioProcessor(inputStream) {
     });
   }, []);
 
-  // Play soundboard effect through live stream destination AND local speaker
-  const playSoundToStream = useCallback((audioUrl) => {
+  // Play soundboard effect through live stream destination AND local speaker.
+  // Fetches remote URLs to a blob first: a cross-origin <audio> element routed
+  // through createMediaElementSource without CORS headers outputs silence.
+  const playSoundToStream = useCallback(async (audioUrl) => {
+    const playLocalOnly = (url) => {
+      const fallbackAudio = new Audio(url);
+      fallbackAudio.play().catch(() => {});
+    };
     try {
       const ctx = audioContextRef.current;
-      if (!ctx) return;
+      if (!ctx || ctx.state === 'closed') {
+        playLocalOnly(audioUrl);
+        return;
+      }
+      if (ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch (e) {
+          // ignore — will play locally below on failure
+        }
+      }
 
-      const audio = new Audio(audioUrl);
-      audio.crossOrigin = 'anonymous';
-      const source = ctx.createMediaElementSource(audio);
+      let playUrl = audioUrl;
+      let objectUrl = null;
+      if (/^https?:\/\//.test(audioUrl)) {
+        try {
+          const res = await fetch(audioUrl);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          objectUrl = URL.createObjectURL(blob);
+          playUrl = objectUrl;
+        } catch (e) {
+          playLocalOnly(audioUrl);
+          return;
+        }
+      }
+
+      const audio = new Audio(playUrl);
+      let source;
+      try {
+        source = ctx.createMediaElementSource(audio);
+      } catch (err) {
+        // Element already captured — fall back to local playback.
+        playLocalOnly(playUrl);
+        return;
+      }
+
+      const cleanup = () => {
+        try {
+          source.disconnect();
+        } catch (e) {
+          // ignore
+        }
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      };
+      audio.addEventListener('ended', cleanup);
 
       // Connect to local speakers so streamer hears it
       source.connect(ctx.destination);
@@ -216,20 +267,25 @@ export function useAudioProcessor(inputStream) {
         source.connect(destinationNodeRef.current);
       }
 
-      audio.play().catch(err => {
-        // Fallback standard audio
-        const fallbackAudio = new Audio(audioUrl);
-        fallbackAudio.play().catch(() => {});
+      await audio.play().catch(() => {
+        cleanup();
+        playLocalOnly(playUrl);
       });
     } catch (err) {
-      const fallbackAudio = new Audio(audioUrl);
-      fallbackAudio.play().catch(() => {});
+      playLocalOnly(audioUrl);
     }
   }, []);
 
+  // Shared live-audio graph handles for synth SFX (see Soundboard.jsx).
+  // Oscillators must be created in THIS context to reach the stream mix.
+  const getAudioGraph = useCallback(() => {
+    const ctx = audioContextRef.current;
+    if (!ctx || ctx.state === 'closed') return null;
+    return { context: ctx, streamDestination: destinationNodeRef.current || null };
+  }, []);
+
   // Return processed stream track
-  const getProcessedStream = useCallback(() => {
-    if (!destinationNodeRef.current || !inputStream) return inputStream;
+  const getProcessedStream = useCallback(() => {    if (!destinationNodeRef.current || !inputStream) return inputStream;
     const processedAudioTrack = destinationNodeRef.current.stream.getAudioTracks()[0];
     const videoTracks = inputStream.getVideoTracks();
     if (!processedAudioTrack) return inputStream;
@@ -254,6 +310,7 @@ export function useAudioProcessor(inputStream) {
     treble,
     updateTreble,
     playSoundToStream,
+    getAudioGraph,
     vuLevel: isMuted ? 0 : vuLevel,
     isClipping: isMuted ? false : isClipping,
     getProcessedStream

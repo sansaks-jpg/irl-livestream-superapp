@@ -136,7 +136,10 @@ app.get('/api/youtube/auto-detect', async (req, res) => {
 });
 
 app.post('/api/youtube/set-video', (req, res) => {
-  const { videoId } = req.body;
+  const { videoId } = req.body || {};
+  if (!videoId || typeof videoId !== 'string' || !videoId.trim()) {
+    return res.status(400).json({ success: false, error: 'videoId tidak boleh kosong' });
+  }
   youtubeService.setVideoId(videoId);
   res.json({ success: true, videoId: youtubeService.currentVideoId });
 });
@@ -151,8 +154,8 @@ app.post('/api/youtube/toggle-simulation', (req, res) => {
 });
 
 app.post('/api/youtube/send-chat', (req, res) => {
-  const { author, message } = req.body;
-  if (!message) {
+  const { author, message } = req.body || {};
+  if (!message || (typeof message === 'string' && !message.trim())) {
     return res.status(400).json({ success: false, error: 'Pesan tidak boleh kosong' });
   }
   const chatItem = youtubeService.sendManualChat(author, message);
@@ -216,7 +219,7 @@ io.on('connection', (socket) => {
   });
 
   // Room Join for WebRTC (Mobile Cam <-> Dashboard)
-  socket.on('join-room', ({ room = 'stream-room', role = 'dashboard' }) => {
+  socket.on('join-room', ({ room = 'stream-room', role = 'dashboard' } = {}) => {
     socket.join(room);
     socket.room = room;
     socket.role = role;
@@ -237,7 +240,8 @@ io.on('connection', (socket) => {
   });
 
   // WebRTC Signaling Relay: offer, answer, ice-candidate
-  socket.on('signal', ({ target, data }) => {
+  socket.on('signal', ({ target, data } = {}) => {
+    if (!data) return;
     if (target) {
       io.to(target).emit('signal', { sender: socket.id, data });
     } else if (socket.room) {
@@ -265,6 +269,9 @@ io.on('connection', (socket) => {
       streamManager.writeChunk(chunk);
     } else if (chunk instanceof ArrayBuffer) {
       streamManager.writeChunk(Buffer.from(chunk));
+    } else if (ArrayBuffer.isView(chunk)) {
+      // Uint8Array / DataView etc. from socket.io binary payloads
+      streamManager.writeChunk(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
     }
   });
 

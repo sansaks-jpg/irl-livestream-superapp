@@ -1,11 +1,11 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { getServerUrl } from '../utils/api';
 
 export function useSocket() {
+  const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [socketId, setSocketId] = useState(null);
-  const socketRef = useRef(null);
 
   useEffect(() => {
     const serverUrl = getServerUrl();
@@ -15,7 +15,7 @@ export function useSocket() {
       reconnectionDelay: 1000
     });
 
-    socketRef.current = socket;
+    setSocket(socket);
 
     socket.on('connect', () => {
       setIsConnected(true);
@@ -31,11 +31,12 @@ export function useSocket() {
 
     return () => {
       socket.disconnect();
+      setSocket(null);
     };
   }, []);
 
   return {
-    socket: socketRef.current,
+    socket,
     isConnected,
     socketId
   };

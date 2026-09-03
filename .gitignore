@@ -23,6 +23,9 @@ local.properties
 # Environment & Logs
 .env
 .env.local
+# Local runtime config — contains the YouTube stream key secret.
+# Auto-created from DEFAULT_CONFIG on first boot.
+server/data/config.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

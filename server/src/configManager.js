@@ -50,9 +50,18 @@ class ConfigManager {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+      // Only persist known keys — drop derived/junk fields (e.g. streamKeyMasked)
+      // that clients may round-trip from GET /api/config responses.
+      const allowed = new Set(Object.keys(DEFAULT_CONFIG));
+      const filtered = {};
+      for (const key of Object.keys(newConfig || {})) {
+        if (allowed.has(key)) {
+          filtered[key] = newConfig[key];
+        }
+      }
       this.config = {
         ...this.config,
-        ...newConfig
+        ...filtered
       };
       fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf8');
       return this.config;
@@ -67,7 +76,7 @@ class ConfigManager {
   }
 
   getSanitized() {
-    // Mask stream key and passwords for safety in responses
+    // Never expose raw secrets — only a masked hint for display.
     const sanitized = { ...this.config };
     if (sanitized.streamKey) {
       sanitized.streamKeyMasked = sanitized.streamKey.length > 8 
@@ -76,6 +85,8 @@ class ConfigManager {
     } else {
       sanitized.streamKeyMasked = '';
     }
+    delete sanitized.streamKey;
+    delete sanitized.obsPassword;
     return sanitized;
   }
 }

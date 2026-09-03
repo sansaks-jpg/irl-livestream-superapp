@@ -1,18 +1,55 @@
 import React, { useState } from 'react';
-import { Music, Volume2, Sparkles, Bell, PartyPopper, Zap, Laugh } from 'lucide-react';
+import { Music, Sparkles, Bell, PartyPopper, Zap, Laugh } from 'lucide-react';
 
-export function Soundboard() {
+// Synthesized SFX board. When getAudioGraph is provided (from useAudioProcessor),
+// sounds are rendered in the shared live-mix AudioContext so both the streamer
+// (local speakers) and viewers (stream destination) hear them. Otherwise local only.
+export function Soundboard({ getAudioGraph }) {
   const [activeSound, setActiveSound] = useState(null);
 
   // Play synthesized SFX using Web Audio API
-  const playSfx = (type) => {
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const now = ctx.currentTime;
-      setActiveSound(type);
+  const playSfx = async (type) => {
+    setActiveSound(type);
+    setTimeout(() => setActiveSound(null), 800);
 
-      setTimeout(() => setActiveSound(null), 800);
+    // Reuse the shared live-mix context when available so SFX reach the stream.
+    let ctx = null;
+    let streamDestination = null;
+    try {
+      const graph = typeof getAudioGraph === 'function' ? getAudioGraph() : null;
+      if (graph) {
+        ctx = graph.context;
+        streamDestination = graph.streamDestination;
+      }
+    } catch (e) {
+      // ignore — fall back to a throwaway local context below
+    }
+
+    let localCtx = null;
+    if (!ctx) {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        localCtx = new AudioCtx();
+        ctx = localCtx;
+      } catch (err) {
+        console.warn('SFX Error:', err);
+        return;
+      }
+    }
+
+    try {
+      if (ctx.state === 'suspended') {
+        await ctx.resume().catch(() => {});
+      }
+      const now = ctx.currentTime;
+      const out = ctx.destination;
+
+      const connect = (node) => {
+        node.connect(out);
+        if (streamDestination) {
+          node.connect(streamDestination);
+        }
+      };
 
       if (type === 'horn') {
         // Airhorn style multi-tone brass
@@ -25,7 +62,7 @@ export function Soundboard() {
           gain.gain.setValueAtTime(0.12, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
           osc.connect(gain);
-          gain.connect(ctx.destination);
+          connect(gain);
           osc.start(now);
           osc.stop(now + 0.6);
         });
@@ -39,7 +76,7 @@ export function Soundboard() {
         gain.gain.setValueAtTime(0.3, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
         osc.connect(gain);
-        gain.connect(ctx.destination);
+        connect(gain);
         osc.start(now);
         osc.stop(now + 0.4);
       } else if (type === 'ding') {
@@ -51,7 +88,7 @@ export function Soundboard() {
         gain.gain.setValueAtTime(0.4, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
         osc.connect(gain);
-        gain.connect(ctx.destination);
+        connect(gain);
         osc.start(now);
         osc.stop(now + 0.8);
       } else if (type === 'fail') {
@@ -64,12 +101,12 @@ export function Soundboard() {
         gain.gain.setValueAtTime(0.25, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
         osc.connect(gain);
-        gain.connect(ctx.destination);
+        connect(gain);
         osc.start(now);
         osc.stop(now + 0.6);
       } else if (type === 'applause') {
         // Noise burst applause / cheering
-        const bufferSize = ctx.sampleRate * 0.8;
+        const bufferSize = Math.floor(ctx.sampleRate * 0.8);
         const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
         const data = buffer.getChannelData(0);
         for (let i = 0; i < bufferSize; i++) {
@@ -86,9 +123,16 @@ export function Soundboard() {
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
         noise.connect(filter);
         filter.connect(gain);
-        gain.connect(ctx.destination);
+        connect(gain);
         noise.start(now);
         noise.stop(now + 0.8);
+      }
+
+      // Close throwaway local contexts shortly after the sound finishes.
+      if (localCtx) {
+        setTimeout(() => {
+          localCtx.close().catch(() => {});
+        }, 1200);
       }
     } catch (err) {
       console.warn('SFX Error:', err);

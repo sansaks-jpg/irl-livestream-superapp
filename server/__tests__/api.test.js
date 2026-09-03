@@ -14,12 +14,31 @@ describe('API Endpoints', () => {
     expect(res.body.camUrlDev).toContain('/cam');
   });
 
-  it('GET /api/config should return sanitized config', async () => {
+  it('GET /api/config should not expose raw secrets', async () => {
     const res = await request(app).get('/api/config');
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.config).toBeDefined();
-    expect(res.body.config.rtmpUrl).toBeDefined();
+    expect(res.body.config.streamKey).toBeUndefined();
+    expect(res.body.config.obsPassword).toBeUndefined();
+    expect(res.body.config.streamKeyMasked).toBeDefined();
+  });
+
+  it('POST /api/config should drop unknown keys', async () => {
+    const res = await request(app).post('/api/config').send({ __probe: 'x' });
+    expect(res.status).toBe(200);
+    expect(res.body.config.__probe).toBeUndefined();
+
+    const check = await request(app).get('/api/config');
+    expect(check.body.config.__probe).toBeUndefined();
+  });
+
+  it('POST /api/youtube/set-video should reject empty body', async () => {
+    const res = await request(app).post('/api/youtube/set-video');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/youtube/send-chat should reject empty message', async () => {
+    const res = await request(app).post('/api/youtube/send-chat').send({});
+    expect(res.status).toBe(400);
   });
 
   it('GET /api/stream/status should return current stream status', async () => {

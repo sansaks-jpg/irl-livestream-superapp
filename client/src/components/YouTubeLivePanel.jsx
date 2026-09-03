@@ -1,20 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, ExternalLink, RefreshCw, Radio } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
 
 export function YouTubeLivePanel({
   socket,
   videoId = '',
   channelHandle = '',
-  initialStats = { viewerCount: 0, likes: 0 }
+  messages: controlledMessages,
+  onMessagesChange
 }) {
-  const [messages, setMessages] = useState([]);
-  const [activeVideoId, setActiveVideoId] = useState(videoId);
+  // Uncontrolled fallback so the panel also works standalone.
+  const [internalMessages, setInternalMessages] = useState([]);
+  const messages = controlledMessages ?? internalMessages;
+  const setMessages = onMessagesChange ?? setInternalMessages;
+
+  const [socketVideoId, setSocketVideoId] = useState(null);
+  const activeVideoId = videoId || socketVideoId;
   const [useOfficialEmbed, setUseOfficialEmbed] = useState(false);
   const chatContainerRef = useRef(null);
-
-  useEffect(() => {
-    if (videoId) setActiveVideoId(videoId);
-  }, [videoId]);
 
   // Sync incoming live chat from socket
   useEffect(() => {
@@ -25,7 +27,7 @@ export function YouTubeLivePanel({
     };
 
     const handleYtStats = (data) => {
-      if (data.videoId) setActiveVideoId(data.videoId);
+      if (data.videoId) setSocketVideoId(data.videoId);
     };
 
     socket.on('yt-chat', handleChat);
@@ -35,7 +37,7 @@ export function YouTubeLivePanel({
       socket.off('yt-chat', handleChat);
       socket.off('yt-stats', handleYtStats);
     };
-  }, [socket]);
+  }, [socket, setMessages]);
 
   // Auto-scroll to bottom
   useEffect(() => {
